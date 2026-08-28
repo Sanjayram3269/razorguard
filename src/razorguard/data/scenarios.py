@@ -19,8 +19,12 @@ class ScenarioConfig:
     @property
     def probabilities(self) -> list[float]:
         values = [
-            self.normal, self.new_account, self.high_value_legitimate,
-            self.compromised, self.burst, self.coordinated,
+            self.normal,
+            self.new_account,
+            self.high_value_legitimate,
+            self.compromised,
+            self.burst,
+            self.coordinated,
             self.shared_infrastructure,
         ]
         total = sum(values)
@@ -30,8 +34,13 @@ class ScenarioConfig:
 
 
 SCENARIOS = np.array([
-    "normal", "new_account", "high_value_legitimate", "compromised",
-    "burst", "coordinated", "shared_infrastructure",
+    "normal",
+    "new_account",
+    "high_value_legitimate",
+    "compromised",
+    "burst",
+    "coordinated",
+    "shared_infrastructure",
 ])
 
 
@@ -42,10 +51,22 @@ def assign_account_scenarios(
 ) -> pd.DataFrame:
     config = config or ScenarioConfig()
     out = accounts.copy()
-    out["scenario"] = rng.choice(SCENARIOS, size=len(out), p=config.probabilities)
+    out["scenario"] = rng.choice(
+        SCENARIOS,
+        size=len(out),
+        p=config.probabilities,
+    )
+
+    # Scenario metadata drives simulation behavior; it is never a model input.
     out.loc[out["scenario"] == "new_account", "account_segment"] = "new"
-    out.loc[out["scenario"] == "high_value_legitimate", "account_segment"] = "premium"
-    out.loc[out["scenario"] == "shared_infrastructure", "account_segment"] = "standard"
+    out.loc[
+        out["scenario"] == "high_value_legitimate",
+        "account_segment",
+    ] = "premium"
+    out.loc[
+        out["scenario"] == "shared_infrastructure",
+        "account_segment",
+    ] = "standard"
     return out
 
 
@@ -53,27 +74,70 @@ def attach_behavior_state(
     rng: np.random.Generator,
     accounts: pd.DataFrame,
     start: pd.Timestamp = pd.Timestamp("2026-01-01"),
-    end: pd.Timestamp = pd.Timestamp("2026-06-29 23:59:59"),
+    end: pd.Timestamp = pd.Timestamp("2026-06-30 23:59:59"),
 ) -> pd.DataFrame:
-    """Attach hidden state used only to generate observable events.
+    """Attach hidden account state used only by the simulation.
 
-    Compromise timing is account-specific. It is simulation metadata and is
-    never exposed as a runtime model feature.
+    The state is never included in the ML feature frame. Compromised accounts
+    receive account-specific regime-change timestamps so pre/post behavior is
+    generated from an actual account history rather than a global time rule.
     """
     out = accounts.copy()
+
     out["behavior_baseline"] = np.clip(
-        rng.lognormal(mean=np.log(140), sigma=0.45, size=len(out)), 35, 900
+        rng.lognormal(
+            mean=np.log(140),
+            sigma=0.45,
+            size=len(out),
+        ),
+        35,
+        900,
     )
 
     high_value = out["scenario"].eq("high_value_legitimate")
-    out.loc[high_value, "behavior_baseline"] *= rng.uniform(2.5, 5.0, high_value.sum())
+    out.loc[high_value, "behavior_baseline"] *= rng.uniform(
+        2.5,
+        5.0,
+        high_value.sum(),
+    )
 
     compromised = out["scenario"].eq("compromised")
     span_seconds = max((end - start).total_seconds(), 1.0)
-    offsets = rng.uniform(0.35, 0.75, len(out)) * span_seconds
-    out["compromise_at"] = start + pd.to_timedelta(offsets, unit="s")
+
+    offsets = rng.uniform(
+        0.35,
+        0.75,
+        len(out),
+    ) * span_seconds
+
+    out["compromise_at"] = (
+        start
+        + pd.to_timedelta(offsets, unit="s")
+    )
     out.loc[~compromised, "compromise_at"] = pd.NaT
+
     out["compromise_multiplier"] = 1.0
-    out.loc[compromised, "compromise_multiplier"] = rng.uniform(4.0, 8.0, compromised.sum())
-    out["secondary_device_id"] = [f"X{i:06d}" for i in range(len(out))]
+    out.loc[compromised, "compromise_multiplier"] = rng.uniform(
+        4.0,
+        8.0,
+        compromised.sum(),
+    )
+
+    # Secondary device is only adopted after compromise.
+    out["secondary_device_id"] = [
+        f"X{i:06d}" for i in range(len(out))
+    ]
+
+    # Each account receives a behavioral session intensity. Normal and
+    # legitimate high-value accounts retain lower intensity than burst or
+    # coordinated scenarios, but there is overlap to avoid shortcut learning.
+    session_multiplier = np.ones(len(out), dtype=float)
+    session_multiplier[out["scenario"].eq("burst").to_numpy()] = rng.uniform(
+        2.0, 4.5, out["scenario"].eq("burst").sum()
+    )
+    session_multiplier[out["scenario"].eq("coordinated").to_numpy()] = rng.uniform(
+        1.4, 3.0, out["scenario"].eq("coordinated").sum()
+    )
+    out["session_intensity"] = session_multiplier
+
     return out
