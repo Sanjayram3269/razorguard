@@ -57,7 +57,6 @@ def assign_account_scenarios(
         p=config.probabilities,
     )
 
-    # Scenario metadata drives simulation behavior; it is never a model input.
     out.loc[out["scenario"] == "new_account", "account_segment"] = "new"
     out.loc[
         out["scenario"] == "high_value_legitimate",
@@ -78,9 +77,9 @@ def attach_behavior_state(
 ) -> pd.DataFrame:
     """Attach hidden account state used only by the simulation.
 
-    The state is never included in the ML feature frame. Compromised accounts
-    receive account-specific regime-change timestamps so pre/post behavior is
-    generated from an actual account history rather than a global time rule.
+    Compromise timing is account-specific and hidden from model features.
+    Activity intensity is also account-specific, allowing the generator to
+    create coherent transaction histories instead of globally random rows.
     """
     out = accounts.copy()
 
@@ -103,16 +102,10 @@ def attach_behavior_state(
 
     compromised = out["scenario"].eq("compromised")
     span_seconds = max((end - start).total_seconds(), 1.0)
-
-    offsets = rng.uniform(
-        0.35,
-        0.75,
-        len(out),
-    ) * span_seconds
-
-    out["compromise_at"] = (
-        start
-        + pd.to_timedelta(offsets, unit="s")
+    offsets = rng.uniform(0.35, 0.75, len(out)) * span_seconds
+    out["compromise_at"] = start + pd.to_timedelta(
+        offsets,
+        unit="s",
     )
     out.loc[~compromised, "compromise_at"] = pd.NaT
 
@@ -123,21 +116,43 @@ def attach_behavior_state(
         compromised.sum(),
     )
 
-    # Secondary device is only adopted after compromise.
     out["secondary_device_id"] = [
         f"X{i:06d}" for i in range(len(out))
     ]
 
-    # Each account receives a behavioral session intensity. Normal and
-    # legitimate high-value accounts retain lower intensity than burst or
-    # coordinated scenarios, but there is overlap to avoid shortcut learning.
-    session_multiplier = np.ones(len(out), dtype=float)
-    session_multiplier[out["scenario"].eq("burst").to_numpy()] = rng.uniform(
-        2.0, 4.5, out["scenario"].eq("burst").sum()
+    # Account-specific event intensity in transactions/day. Overlap between
+    # groups is intentional: scenario labels must not become trivial proxies.
+    intensity = rng.lognormal(
+        mean=np.log(1.7),
+        sigma=0.55,
+        size=len(out),
     )
-    session_multiplier[out["scenario"].eq("coordinated").to_numpy()] = rng.uniform(
-        1.4, 3.0, out["scenario"].eq("coordinated").sum()
+    intensity = np.clip(intensity, 0.3, 12.0)
+
+    new_mask = out["scenario"].eq("new_account").to_numpy()
+    high_value_mask = out["scenario"].eq("high_value_legitimate").to_numpy()
+    burst_mask = out["scenario"].eq("burst").to_numpy()
+    coordinated_mask = out["scenario"].eq("coordinated").to_numpy()
+    shared_mask = out["scenario"].eq("shared_infrastructure").to_numpy()
+
+    intensity[new_mask] *= rng.uniform(0.55, 1.05, new_mask.sum())
+    intensity[high_value_mask] *= rng.uniform(0.7, 1.25, high_value_mask.sum())
+    intensity[burst_mask] *= rng.uniform(2.0, 3.5, burst_mask.sum())
+    intensity[coordinated_mask] *= rng.uniform(1.4, 2.5, coordinated_mask.sum())
+    intensity[shared_mask] *= rng.uniform(0.8, 1.15, shared_mask.sum())
+
+    out["activity_rate_per_day"] = np.clip(
+        intensity,
+        0.2,
+        30.0,
     )
-    out["session_intensity"] = session_multiplier
+
+    # A small probability of extra clustering is stored as hidden state. It is
+    # translated into observable timestamps in the transaction generator.
+    out["burst_probability"] = np.where(
+        burst_mask,
+        rng.uniform(0.45, 0.85, len(out)),
+        rng.uniform(0.01, 0.08, len(out)),
+    )
 
     return out
