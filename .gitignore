@@ -11,3 +11,5 @@ data/generated/*
 .pytest_cache/
 .DS_Store
 .vscode/
+
+src/razorguard.egg-info/
