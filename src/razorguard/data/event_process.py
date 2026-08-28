@@ -1,36 +1,9 @@
 from __future__ import annotations
 
+from collections import defaultdict
+
 import numpy as np
 import pandas as pd
-
-
-def _split_interval_counts(
-    rng: np.random.Generator,
-    rates_per_day: np.ndarray,
-    days: float,
-    target_total: int,
-) -> np.ndarray:
-    """Allocate an exact total event count proportional to account intensity."""
-    weights = np.maximum(rates_per_day, 1e-9)
-    expected = days * weights
-    expected *= target_total / expected.sum()
-
-    counts = np.floor(expected).astype(int)
-    remainder = target_total - int(counts.sum())
-    if remainder > 0:
-        fractional = expected - counts
-        selected = np.argsort(fractional)[-remainder:]
-        counts[selected] += 1
-    elif remainder < 0:
-        fractional = expected - counts
-        candidates = np.argsort(fractional)[: -remainder]
-        for idx in candidates:
-            if counts[idx] > 0:
-                counts[idx] -= 1
-
-    # Shuffle equal-probability ties so account IDs do not dictate allocation.
-    order = rng.permutation(len(counts))
-    return counts[order][np.argsort(order)]
 
 
 def generate_account_event_stream(
@@ -40,125 +13,212 @@ def generate_account_event_stream(
     start: pd.Timestamp = pd.Timestamp("2026-01-01"),
     end: pd.Timestamp = pd.Timestamp("2026-06-30 23:59:59"),
 ) -> pd.DataFrame:
-    """Generate an exact-size event stream from account-level intensities.
-
-    Events are generated in two regimes for compromised accounts so the
-    post-compromise activity increase is observable from history alone.
     """
-    total_seconds = (end - start).total_seconds()
-    horizon_days = total_seconds / 86_400.0
+    Generate transaction events from account-level activity intensity.
 
-    scenario = accounts["scenario"].to_numpy()
-    baseline_rate = accounts["activity_rate_per_day"].to_numpy(dtype=float)
-    compromise_at = accounts["compromise_at"].to_numpy()
+    The total number of events is exactly n_transactions.
 
-    normal_counts = np.zeros(len(accounts), dtype=int)
-    post_counts = np.zeros(len(accounts), dtype=int)
+    Compromised accounts have:
+      - a normal pre-compromise regime
+      - an elevated post-compromise regime
 
-    compromised = scenario == "compromised"
-    normal_fraction = np.full(len(accounts), 1.0)
-    normal_fraction[compromised] = np.clip(
-        (compromise_at[compromised] - np.datetime64(start))
-        / np.timedelta64(1, "D")
-        / horizon_days,
-        0.20,
-        0.90,
+    The hidden scenario/state is only used by the simulator and is never
+    exposed as a model feature.
+    """
+
+    accounts = accounts.reset_index(drop=True).copy()
+
+    horizon_days = max(
+        (end - start).total_seconds() / 86_400.0,
+        1e-9,
     )
 
-    pre_days = horizon_days * normal_fraction
+    rates = accounts["activity_rate_per_day"].to_numpy(dtype=float)
+    rates = np.clip(rates, 0.1, 30.0)
+
+    scenarios = accounts["scenario"].to_numpy()
+    compromised_mask = scenarios == "compromised"
+
+    compromise_at = accounts["compromise_at"]
+
+    pre_days = np.full(len(accounts), horizon_days)
+
+    valid_compromise = compromised_mask & compromise_at.notna().to_numpy()
+
+    if valid_compromise.any():
+        pre_days[valid_compromise] = np.clip(
+            (
+                compromise_at[valid_compromise]
+                - start
+            ).dt.total_seconds().to_numpy()
+            / 86_400.0,
+            1.0,
+            horizon_days - 1.0,
+        )
+
     post_days = horizon_days - pre_days
 
-    # Compromised accounts accelerate after the hidden transition; other
-    # scenarios keep their baseline intensity.
-    post_rate = baseline_rate.copy()
-    post_rate[compromised] *= 2.2
+    # Compromised accounts become more active after compromise.
+    post_rates = rates.copy()
+    post_rates[compromised_mask] *= 2.25
 
-    expected_pre = baseline_rate * pre_days
-    expected_post = post_rate * post_days
+    expected_pre = rates * pre_days
+    expected_post = post_rates * post_days
+
     expected_total = expected_pre + expected_post
 
-    scale = n_transactions / max(expected_total.sum(), 1e-9)
+    # Scale expected counts to the requested dataset size.
+    scale = n_transactions / max(
+        expected_total.sum(),
+        1e-9,
+    )
+
     expected_pre *= scale
     expected_post *= scale
 
-    normal_counts = rng.poisson(expected_pre)
-    post_counts = rng.poisson(expected_post)
+    # Poisson draws provide natural account-level count variation.
+    pre_counts = rng.poisson(expected_pre)
+    post_counts = np.zeros(len(accounts), dtype=int)
+    post_counts[compromised_mask] = rng.poisson(
+        expected_post[compromised_mask]
+    )
 
-    # Correct stochastic sampling to hit the requested dataset size exactly.
-    current_total = int(normal_counts.sum() + post_counts.sum())
+    # Correct the stochastic draw so that we produce exactly
+    # n_transactions.
+    current_total = int(
+        pre_counts.sum() + post_counts.sum()
+    )
+
     diff = n_transactions - current_total
 
     if diff > 0:
         weights = expected_total / expected_total.sum()
-        additions = rng.multinomial(diff, weights)
-        normal_counts += additions
+        additions = rng.multinomial(
+            diff,
+            weights,
+        )
+
+        # Prefer the post-compromise regime for compromised accounts
+        # only through their already increased expected intensity.
+        pre_counts += additions
+
     elif diff < 0:
-        removable = np.concatenate([normal_counts, post_counts])
-        for flat_idx in rng.choice(
-            len(removable), size=min(-diff, int(removable.sum())), replace=False
-        ):
-            if removable[flat_idx] > 0:
-                removable[flat_idx] -= 1
-        normal_counts = removable[: len(accounts)]
-        post_counts = removable[len(accounts) :]
+
+        combined = np.concatenate(
+            [pre_counts, post_counts]
+        )
+
+        removable_indices = np.flatnonzero(
+            combined > 0
+        )
+
+        chosen = rng.choice(
+            removable_indices,
+            size=min(
+                -diff,
+                len(removable_indices),
+            ),
+            replace=False,
+        )
+
+        combined[chosen] -= 1
+
+        pre_counts = combined[: len(accounts)]
+        post_counts = combined[len(accounts):]
 
     rows: list[dict] = []
 
-    for i, account in accounts.iterrows():
+    for idx, account in accounts.iterrows():
+
         account_id = account["account_id"]
-        base_rate = float(account["activity_rate_per_day"])
 
-        n_pre = int(normal_counts[i])
-        n_post = int(post_counts[i]) if compromised[i] else 0
+        n_pre = int(pre_counts[idx])
+        n_post = int(post_counts[idx])
 
-        if n_pre:
-            pre_end = account["compromise_at"] if compromised[i] else end
-            pre_end = pd.Timestamp(pre_end)
-            pre_span = max((pre_end - start).total_seconds(), 1.0)
-            offsets = rng.uniform(0, pre_span, n_pre)
-            for offset in offsets:
-                rows.append(
-                    {
-                        "account_id": account_id,
-                        "timestamp": start + pd.to_timedelta(offset, unit="s"),
-                        "regime": "pre" if compromised[i] else "baseline",
-                    }
+        if n_pre > 0:
+
+            pre_end = (
+                pd.Timestamp(account["compromise_at"])
+                if compromised_mask[idx]
+                else end
+            )
+
+            pre_span = max(
+                (pre_end - start).total_seconds(),
+                1.0,
+            )
+
+            timestamps = (
+                start
+                + pd.to_timedelta(
+                    rng.uniform(
+                        0,
+                        pre_span,
+                        n_pre,
+                    ),
+                    unit="s",
                 )
+            )
 
-        if n_post:
-            post_start = pd.Timestamp(account["compromise_at"])
-            post_span = max((end - post_start).total_seconds(), 1.0)
-            offsets = rng.uniform(0, post_span, n_post)
-            for offset in offsets:
-                rows.append(
-                    {
-                        "account_id": account_id,
-                        "timestamp": post_start + pd.to_timedelta(offset, unit="s"),
-                        "regime": "post",
-                    }
+            rows.extend(
+                {
+                    "account_id": account_id,
+                    "timestamp": ts,
+                    "regime": (
+                        "pre"
+                        if compromised_mask[idx]
+                        else "baseline"
+                    ),
+                }
+                for ts in timestamps
+            )
+
+        if n_post > 0:
+
+            post_start = pd.Timestamp(
+                account["compromise_at"]
+            )
+
+            post_span = max(
+                (end - post_start).total_seconds(),
+                1.0,
+            )
+
+            timestamps = (
+                post_start
+                + pd.to_timedelta(
+                    rng.uniform(
+                        0,
+                        post_span,
+                        n_post,
+                    ),
+                    unit="s",
                 )
+            )
+
+            rows.extend(
+                {
+                    "account_id": account_id,
+                    "timestamp": ts,
+                    "regime": "post",
+                }
+                for ts in timestamps
+            )
 
     events = pd.DataFrame(rows)
-    if len(events) != n_transactions:
-        # Deterministic fallback for the tiny residual caused by integer
-        # allocation: add/remove uniformly sampled events without changing
-        # account-level semantics materially.
-        diff = n_transactions - len(events)
-        if diff > 0:
-            extras = rng.choice(len(accounts), size=diff, replace=True)
-            extra_rows = []
-            for idx in extras:
-                extra_rows.append(
-                    {
-                        "account_id": accounts.iloc[idx]["account_id"],
-                        "timestamp": start + pd.to_timedelta(
-                            rng.uniform(0, total_seconds), unit="s"
-                        ),
-                        "regime": "baseline",
-                    }
-                )
-            events = pd.concat([events, pd.DataFrame(extra_rows)], ignore_index=True)
-        elif diff < 0:
-            events = events.iloc[:n_transactions].copy()
 
-    return events.sort_values("timestamp", kind="stable").reset_index(drop=True)
+    # Defensive invariant.
+    if len(events) != n_transactions:
+        raise RuntimeError(
+            f"Event generator produced {len(events)} "
+            f"events; expected {n_transactions}"
+        )
+
+    return (
+        events
+        .sort_values(
+            "timestamp",
+            kind="stable",
+        )
+        .reset_index(drop=True)
+    )
