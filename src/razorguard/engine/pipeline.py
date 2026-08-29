@@ -7,6 +7,59 @@ from razorguard.risk.case import RiskCase
 from razorguard.risk.fusion import fuse_risk, risk_level
 from razorguard.risk.policy import policy_decision
 
+def behavioral_signal(row) -> float:
+    """
+    Convert observable behavioral deviations into [0, 1].
+
+    This signal is deterministic and independent of the
+    supervised model probability.
+    """
+
+    def value(key: str, default: float = 0.0) -> float:
+        try:
+            raw = row.get(key, default)
+            if raw is None:
+                return default
+            return float(raw)
+        except (TypeError, ValueError):
+            return default
+
+    signals = [
+        min(
+            value("amount_zscore") / 4.0,
+            1.0,
+        )
+        if value("amount_zscore") > 0
+        else 0.0,
+
+        1.0
+        if value("is_dormant_return") > 0
+        else 0.0,
+
+        min(
+            value("account_id_prior_count_60m") / 8.0,
+            1.0,
+        ),
+
+        1.0
+        if value("location_mismatch") > 0
+        else 0.0,
+
+        min(
+            value("account_velocity_ratio"),
+            1.0,
+        ),
+    ]
+
+    return float(
+        min(
+            max(
+                sum(signals) / len(signals),
+                0.0,
+            ),
+            1.0,
+        )
+    )
 
 def _clip_probability(value: float) -> float:
     """Keep model probability inside the valid probability domain."""
