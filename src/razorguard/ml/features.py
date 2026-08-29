@@ -6,17 +6,22 @@ import numpy as np
 import pandas as pd
 
 
+# ============================================================
+# POINT-IN-TIME ROLLING FEATURES
+# ============================================================
+
+
 def _prior_rolling_features(
     df: pd.DataFrame,
     entity_col: str,
     windows_minutes: list[int],
 ) -> pd.DataFrame:
     """
-    Calculate rolling count and amount using ONLY events before
-    the current transaction.
+    Calculate rolling count and amount using ONLY events
+    strictly before the current transaction.
 
-    Uses pandas Timedelta objects rather than relying on the
-    internal integer representation of datetime64.
+    The current event is appended to the state only after
+    its historical features have been calculated.
     """
 
     entities = df[entity_col].to_numpy()
@@ -30,7 +35,7 @@ def _prior_rolling_features(
         }
     )
 
-    result = {}
+    result: dict[str, np.ndarray] = {}
 
     for window in windows_minutes:
         result[f"{entity_col}_prior_count_{window}m"] = np.zeros(
@@ -54,32 +59,24 @@ def _prior_rolling_features(
         timestamp = pd.Timestamp(timestamp)
 
         for window in windows_minutes:
-
             queue = states[entity][window]
-
             cutoff = timestamp - window_deltas[window]
 
+            # Exclude events at or before the cutoff.
+            # Therefore the window is strictly:
+            # (timestamp - window, timestamp)
             while queue and queue[0][0] <= cutoff:
                 queue.popleft()
 
-            result[
-                f"{entity_col}_prior_count_{window}m"
-            ][i] = len(queue)
+            result[f"{entity_col}_prior_count_{window}m"][i] = len(queue)
 
-            result[
-                f"{entity_col}_prior_amount_{window}m"
-            ][i] = sum(
+            result[f"{entity_col}_prior_amount_{window}m"][i] = sum(
                 value
                 for _, value in queue
             )
 
         # IMPORTANT:
-        #
-        # The current transaction is added AFTER
-        # calculating its features.
-        #
-        # Therefore it can NEVER leak into its
-        # own velocity features.
+        # Add current event AFTER calculating its features.
         for window in windows_minutes:
             states[entity][window].append(
                 (
@@ -94,6 +91,11 @@ def _prior_rolling_features(
     )
 
 
+# ============================================================
+# POINT-IN-TIME UNIQUE ENTITY FEATURES
+# ============================================================
+
+
 def _prior_unique_entities(
     df: pd.DataFrame,
     source_col: str,
@@ -102,6 +104,13 @@ def _prior_unique_entities(
     """
     Number of unique target entities observed previously
     for each source entity.
+
+    Example:
+        account -> merchant
+
+        A -> M1  => 0
+        A -> M2  => 1
+        A -> M3  => 2
     """
 
     seen = defaultdict(set)
@@ -118,7 +127,6 @@ def _prior_unique_entities(
         zip(sources, targets)
     ):
         result[i] = len(seen[source])
-
         seen[source].add(target)
 
     return pd.Series(
@@ -127,39 +135,138 @@ def _prior_unique_entities(
     )
 
 
+def _prior_unique_entities_rolling(
+    df: pd.DataFrame,
+    source_col: str,
+    target_col: str,
+    window_minutes: int,
+) -> pd.Series:
+    """
+    Count unique target entities observed for a source entity
+    inside a historical rolling window.
+
+    The current transaction is NEVER included.
+    """
+
+    sources = df[source_col].to_numpy()
+    targets = df[target_col].to_numpy()
+    timestamps = df["timestamp"].to_numpy()
+
+    window = pd.Timedelta(minutes=window_minutes)
+
+    states: dict[object, deque] = defaultdict(deque)
+    result = np.zeros(
+        len(df),
+        dtype=np.int32,
+    )
+
+    for i, (source, target, timestamp) in enumerate(
+        zip(sources, targets, timestamps)
+    ):
+        timestamp = pd.Timestamp(timestamp)
+        queue = states[source]
+
+        cutoff = timestamp - window
+
+        # Remove events outside the historical window.
+        while queue and queue[0][0] <= cutoff:
+            queue.popleft()
+
+        # Current event has NOT been inserted yet.
+        result[i] = len({value for _, value in queue})
+
+        # Insert current event only after feature calculation.
+        queue.append(
+            (
+                timestamp,
+                target,
+            )
+        )
+
+    return pd.Series(
+        result,
+        index=df.index,
+    )
+
+
+# ============================================================
+# HISTORICAL FEATURES
+# ============================================================
+
+
 def add_historical_features(
     transactions: pd.DataFrame,
 ) -> pd.DataFrame:
+    """
+    Build strictly point-in-time transaction features.
+
+    No future transaction information is used.
+    The chargeback label is retained in the returned dataframe
+    for evaluation/training but is never part of runtime features.
+    """
+
+    required_columns = {
+        "transaction_id",
+        "account_id",
+        "merchant_id",
+        "device_id",
+        "timestamp",
+        "amount",
+        "ip_country",
+        "shipping_country",
+    }
+
+    missing = required_columns - set(transactions.columns)
+
+    if missing:
+        raise ValueError(
+            f"Missing required transaction columns: {sorted(missing)}"
+        )
 
     df = (
         transactions
-        .sort_values("timestamp")
+        .sort_values(
+            "timestamp",
+            kind="stable",
+        )
         .reset_index(drop=True)
         .copy()
     )
 
-    # ============================================================
+    df["timestamp"] = pd.to_datetime(
+        df["timestamp"],
+    )
+
+    # ========================================================
     # 1. ACCOUNT HISTORY
-    # ============================================================
+    # ========================================================
 
     prior_count = (
-        df.groupby("account_id")
+        df.groupby(
+            "account_id",
+            sort=False,
+        )
         .cumcount()
     )
 
     prior_amount_sum = (
-        df.groupby("account_id")["amount"]
+        df.groupby(
+            "account_id",
+            sort=False,
+        )["amount"]
         .cumsum()
         - df["amount"]
     )
 
+    amount_squared = df["amount"] ** 2
+
     prior_amount_squared_sum = (
-        df.assign(
-            amount_squared=df["amount"] ** 2
+        amount_squared.groupby(
+            df["account_id"],
+            sort=False,
         )
-        .groupby("account_id")["amount_squared"]
         .cumsum()
-        - df["amount"] ** 2
+        - amount_squared
     )
 
     count_float = (
@@ -185,9 +292,13 @@ def add_historical_features(
 
     df["prior_tx_count"] = prior_count
 
+    fallback_amount = float(
+        df["amount"].median()
+    )
+
     df["prior_amount_mean"] = (
         prior_mean
-        .fillna(df["amount"].median())
+        .fillna(fallback_amount)
     )
 
     df["prior_amount_std"] = (
@@ -196,9 +307,9 @@ def add_historical_features(
         .pow(0.5)
     )
 
-    # ============================================================
+    # ========================================================
     # 2. BEHAVIORAL DEVIATION
-    # ============================================================
+    # ========================================================
 
     df["amount_vs_history"] = (
         df["amount"]
@@ -206,7 +317,7 @@ def add_historical_features(
         df["prior_amount_mean"]
         .replace(
             0,
-            df["amount"].median(),
+            fallback_amount,
         )
     )
 
@@ -217,12 +328,15 @@ def add_historical_features(
         )
         /
         df["prior_amount_std"]
-        .replace(0, np.nan)
+        .replace(
+            0,
+            np.nan,
+        )
     ).fillna(0)
 
-    # ============================================================
+    # ========================================================
     # 3. TIME FEATURES
-    # ============================================================
+    # ========================================================
 
     df["hour"] = (
         df["timestamp"]
@@ -240,12 +354,15 @@ def add_historical_features(
         (df["hour"] >= 23)
     ).astype(int)
 
-    # ============================================================
+    # ========================================================
     # 4. TIME SINCE PREVIOUS TRANSACTION
-    # ============================================================
+    # ========================================================
 
     df["previous_timestamp"] = (
-        df.groupby("account_id")["timestamp"]
+        df.groupby(
+            "account_id",
+            sort=False,
+        )["timestamp"]
         .shift(1)
     )
 
@@ -258,24 +375,41 @@ def add_historical_features(
         / 60.0
     )
 
-    # No previous transaction = very large gap.
     df["minutes_since_previous_tx"] = (
         df["minutes_since_previous_tx"]
         .fillna(10_000)
     )
 
-    # ============================================================
-    # 5. LOCATION
-    # ============================================================
+    # ========================================================
+    # 5. DORMANCY / RETURN BEHAVIOR
+    # ========================================================
+
+    # A return after >= 7 days of inactivity.
+    # A long dormancy is >= 30 days.
+    #
+    # These are based ONLY on the previous transaction,
+    # therefore they are safe for real-time inference.
+
+    df["is_dormant_return"] = (
+        df["minutes_since_previous_tx"] >= 7 * 24 * 60
+    ).astype(int)
+
+    df["is_long_dormancy"] = (
+        df["minutes_since_previous_tx"] >= 30 * 24 * 60
+    ).astype(int)
+
+    # ========================================================
+    # 6. LOCATION
+    # ========================================================
 
     df["location_mismatch"] = (
         df["ip_country"]
         != df["shipping_country"]
     ).astype(int)
 
-    # ============================================================
-    # 6. ACCOUNT VELOCITY
-    # ============================================================
+    # ========================================================
+    # 7. ACCOUNT VELOCITY
+    # ========================================================
 
     account_velocity = _prior_rolling_features(
         df,
@@ -284,13 +418,16 @@ def add_historical_features(
     )
 
     df = pd.concat(
-        [df, account_velocity],
+        [
+            df,
+            account_velocity,
+        ],
         axis=1,
     )
 
-    # ============================================================
-    # 7. DEVICE VELOCITY
-    # ============================================================
+    # ========================================================
+    # 8. DEVICE VELOCITY
+    # ========================================================
 
     device_velocity = _prior_rolling_features(
         df,
@@ -299,13 +436,16 @@ def add_historical_features(
     )
 
     df = pd.concat(
-        [df, device_velocity],
+        [
+            df,
+            device_velocity,
+        ],
         axis=1,
     )
 
-    # ============================================================
-    # 8. MERCHANT VELOCITY
-    # ============================================================
+    # ========================================================
+    # 9. MERCHANT VELOCITY
+    # ========================================================
 
     merchant_velocity = _prior_rolling_features(
         df,
@@ -314,13 +454,39 @@ def add_historical_features(
     )
 
     df = pd.concat(
-        [df, merchant_velocity],
+        [
+            df,
+            merchant_velocity,
+        ],
         axis=1,
     )
 
-    # ============================================================
-    # 9. DEVICE REUSE
-    # ============================================================
+    # ========================================================
+    # 10. ACCOUNT -> MERCHANT HISTORY
+    # ========================================================
+
+    df["prior_unique_merchants"] = (
+        _prior_unique_entities(
+            df,
+            "account_id",
+            "merchant_id",
+        )
+    )
+
+    df[
+        "account_id_prior_unique_merchant_id_60m"
+    ] = (
+        _prior_unique_entities_rolling(
+            df,
+            "account_id",
+            "merchant_id",
+            60,
+        )
+    )
+
+    # ========================================================
+    # 11. DEVICE REUSE
+    # ========================================================
 
     df["prior_accounts_per_device"] = (
         _prior_unique_entities(
@@ -334,15 +500,18 @@ def add_historical_features(
         df["prior_accounts_per_device"] >= 3
     ).astype(int)
 
-    # ============================================================
-    # 10. DERIVED VELOCITY FEATURES
-    # ============================================================
+    # ========================================================
+    # 12. DERIVED VELOCITY FEATURES
+    # ========================================================
 
     df["account_amount_per_tx_1h"] = (
         df["account_id_prior_amount_60m"]
         /
         df["account_id_prior_count_60m"]
-        .replace(0, np.nan)
+        .replace(
+            0,
+            np.nan,
+        )
     ).fillna(0)
 
     df["account_velocity_ratio"] = (
@@ -354,20 +523,20 @@ def add_historical_features(
         )
     )
 
-    # ============================================================
-    # SAFETY CHECK
-    # ============================================================
+    # ========================================================
+    # 13. RUNTIME SAFETY CHECK
+    # ========================================================
 
-    # Chargeback is a future outcome and must NEVER be used
-    # as a runtime feature.
-    runtime_columns = set(
-        df.columns
-    ) - {
-        "is_chargeback",
-        "transaction_id",
-        "timestamp",
-        "previous_timestamp",
-    }
+    runtime_columns = (
+        set(df.columns)
+        -
+        {
+            "is_chargeback",
+            "transaction_id",
+            "timestamp",
+            "previous_timestamp",
+        }
+    )
 
     if "is_chargeback" in runtime_columns:
         raise RuntimeError(
@@ -377,18 +546,36 @@ def add_historical_features(
     return df
 
 
+# ============================================================
+# MODEL FEATURE DEFINITIONS
+# ============================================================
+
+
 NUMERIC_FEATURES = [
+    # Transaction
     "amount",
+
+    # Account history
     "prior_tx_count",
     "prior_amount_mean",
     "prior_amount_std",
+
+    # Behavioral deviation
     "amount_vs_history",
     "amount_zscore",
-    "location_mismatch",
+
+    # Time
     "hour",
     "day_of_week",
     "is_night",
     "minutes_since_previous_tx",
+
+    # Dormancy
+    "is_dormant_return",
+    "is_long_dormancy",
+
+    # Location
+    "location_mismatch",
 
     # Account velocity
     "account_id_prior_count_5m",
@@ -410,9 +597,15 @@ NUMERIC_FEATURES = [
     "merchant_id_prior_count_1440m",
     "merchant_id_prior_amount_1440m",
 
-    # Network/behavior
+    # Account -> merchant behavior
+    "prior_unique_merchants",
+    "account_id_prior_unique_merchant_id_60m",
+
+    # Device reuse
     "prior_accounts_per_device",
     "device_accounts_signal",
+
+    # Derived velocity
     "account_amount_per_tx_1h",
     "account_velocity_ratio",
 ]
@@ -426,12 +619,20 @@ CATEGORICAL_FEATURES = [
 ]
 
 
+# ============================================================
+# MODEL FRAME
+# ============================================================
+
+
 def build_model_frame(
     transactions: pd.DataFrame,
 ) -> pd.DataFrame:
+    """
+    Build the final point-in-time training/evaluation frame.
+    """
 
     df = add_historical_features(
-        transactions
+        transactions,
     )
 
     return df[
