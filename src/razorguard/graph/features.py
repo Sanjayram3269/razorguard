@@ -14,23 +14,50 @@ def add_graph_features(
 
     Every feature only uses transactions observed BEFORE
     the current transaction.
+
+    The current transaction is added to graph state only
+    AFTER all features for that transaction are calculated.
     """
+
+    required_columns = {
+        "account_id",
+        "device_id",
+        "merchant_id",
+        "timestamp",
+    }
+
+    missing = required_columns - set(
+        transactions.columns
+    )
+
+    if missing:
+        raise ValueError(
+            f"Missing required transaction columns: "
+            f"{sorted(missing)}"
+        )
 
     df = (
         transactions
-        .sort_values("timestamp")
+        .sort_values(
+            "timestamp",
+            kind="stable",
+        )
         .reset_index(drop=True)
         .copy()
     )
 
-    account_devices = defaultdict(set)
-    account_merchants = defaultdict(set)
+    df["timestamp"] = pd.to_datetime(
+        df["timestamp"]
+    )
 
-    device_accounts = defaultdict(set)
-    device_merchants = defaultdict(set)
+    account_devices: dict[object, set] = defaultdict(set)
+    account_merchants: dict[object, set] = defaultdict(set)
 
-    merchant_accounts = defaultdict(set)
-    merchant_devices = defaultdict(set)
+    device_accounts: dict[object, set] = defaultdict(set)
+    device_merchants: dict[object, set] = defaultdict(set)
+
+    merchant_accounts: dict[object, set] = defaultdict(set)
+    merchant_devices: dict[object, set] = defaultdict(set)
 
     features = {
         "prior_devices_per_account": [],
@@ -46,10 +73,14 @@ def add_graph_features(
     }
 
     for row in df.itertuples(index=False):
-
         account = row.account_id
         device = row.device_id
         merchant = row.merchant_id
+
+        # --------------------------------------------------
+        # Read historical graph state.
+        # Current transaction has NOT been inserted yet.
+        # --------------------------------------------------
 
         features[
             "prior_devices_per_account"
@@ -122,6 +153,10 @@ def add_graph_features(
                 not in account_merchants[account]
             )
         )
+
+        # --------------------------------------------------
+        # Update graph state AFTER feature calculation.
+        # --------------------------------------------------
 
         account_devices[account].add(device)
         account_merchants[account].add(merchant)

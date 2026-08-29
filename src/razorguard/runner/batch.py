@@ -168,9 +168,13 @@ def score_batch(
         + CATEGORICAL_FEATURES
     ]
 
-    model_probability = model.predict_proba(
-        model_input
-    )[:, 1]
+    model_probability = (
+    pd.DataFrame(
+        model.predict_proba(model_input)
+    )
+    .iloc[:, 1]
+    .to_numpy(dtype=float)
+)
 
     network_scores = (
         network_frame[

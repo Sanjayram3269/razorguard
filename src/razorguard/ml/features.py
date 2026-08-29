@@ -626,21 +626,42 @@ CATEGORICAL_FEATURES = [
 
 def build_model_frame(
     transactions: pd.DataFrame,
+    *,
+    include_label: bool | None = None,
 ) -> pd.DataFrame:
     """
-    Build the final point-in-time training/evaluation frame.
+    Build the final point-in-time model frame.
+
+    Training/evaluation data includes ``is_chargeback``.
+    Runtime inference data does not require the label.
+
+    When ``include_label`` is None, the label is included only
+    when it exists in the input dataframe.
     """
 
     df = add_historical_features(
         transactions,
     )
 
-    return df[
+    columns = (
         NUMERIC_FEATURES
         + CATEGORICAL_FEATURES
         + [
             "timestamp",
             "transaction_id",
-            "is_chargeback",
         ]
-    ].copy()
+    )
+
+    if include_label is None:
+        include_label = "is_chargeback" in df.columns
+
+    if include_label:
+        if "is_chargeback" not in df.columns:
+            raise ValueError(
+                "include_label=True requires "
+                "'is_chargeback' in the input data"
+            )
+
+        columns.append("is_chargeback")
+
+    return df[columns].copy()
