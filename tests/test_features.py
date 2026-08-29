@@ -141,3 +141,65 @@ def test_chargeback_label_is_not_a_runtime_feature():
     ]
 
     assert "is_chargeback" not in feature_columns
+
+def test_behavioral_features_are_point_in_time():
+    df = pd.DataFrame(
+        {
+            "transaction_id": ["t1", "t2", "t3"],
+            "account_id": ["a", "a", "a"],
+            "merchant_id": ["m1", "m2", "m3"],
+            "device_id": ["d", "d", "d"],
+            "timestamp": pd.to_datetime(
+                [
+                    "2026-01-01 12:00:00",
+                    "2026-01-01 12:01:00",
+                    "2026-01-01 12:02:00",
+                ]
+            ),
+            "amount": [100.0, 100.0, 100.0],
+            "ip_country": ["IN"] * 3,
+            "shipping_country": ["IN"] * 3,
+        }
+    )
+
+    out = add_historical_features(df)
+
+    assert out["prior_unique_merchants"].tolist() == [
+        0,
+        1,
+        2,
+    ]
+
+    assert out[
+        "account_id_prior_unique_merchant_id_60m"
+    ].tolist() == [
+        0,
+        1,
+        2,
+    ]
+
+
+def test_dormancy_feature_detects_long_gap():
+    df = pd.DataFrame(
+        {
+            "transaction_id": ["t1", "t2"],
+            "account_id": ["a", "a"],
+            "merchant_id": ["m", "m"],
+            "device_id": ["d", "d"],
+            "timestamp": pd.to_datetime(
+                [
+                    "2026-01-01 12:00:00",
+                    "2026-01-10 12:00:00",
+                ]
+            ),
+            "amount": [100.0, 300.0],
+            "ip_country": ["IN", "IN"],
+            "shipping_country": ["IN", "IN"],
+        }
+    )
+
+    out = add_historical_features(df)
+
+    assert out.loc[0, "is_dormant_return"] == 0
+    assert out.loc[1, "is_dormant_return"] == 1
+    assert out.loc[1, "is_long_dormancy"] == 0
