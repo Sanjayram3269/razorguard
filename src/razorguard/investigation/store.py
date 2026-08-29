@@ -25,6 +25,26 @@ VALID_PRIORITIES = {
     "CRITICAL",
 }
 
+ALLOWED_STATUS_TRANSITIONS = {
+    "OPEN": {
+        "IN_REVIEW",
+        "ESCALATED",
+        "RESOLVED",
+        "DISMISSED",
+    },
+    "IN_REVIEW": {
+        "ESCALATED",
+        "RESOLVED",
+        "DISMISSED",
+    },
+    "ESCALATED": {
+        "IN_REVIEW",
+        "RESOLVED",
+        "DISMISSED",
+    },
+    "RESOLVED": set(),
+    "DISMISSED": set(),
+}
 
 def _utc_now() -> str:
     """Return the current UTC timestamp in ISO-8601 format."""
@@ -459,7 +479,7 @@ class CaseStore:
         actor: str = "system",
         details: str = "",
     ) -> dict[str, Any]:
-        """Transition a case to a valid operational state."""
+        """Transition a case through the investigator lifecycle."""
 
         status = status.upper()
 
@@ -493,6 +513,17 @@ class CaseStore:
             raise ValueError(
                 f"case {case_id} is already "
                 f"in {status}"
+            )
+
+        allowed = ALLOWED_STATUS_TRANSITIONS.get(
+            current,
+            set(),
+        )
+
+        if status not in allowed:
+            raise ValueError(
+                f"invalid transition: "
+                f"{current} -> {status}"
             )
 
         return self._update_case(

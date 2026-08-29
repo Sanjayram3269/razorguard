@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -35,6 +36,61 @@ class TransactionScoreResponse(BaseModel):
 
     model: str
     model_threshold: float
+
+    case_id: str | None = None
+
+
+class CaseResponse(BaseModel):
+    case_id: str
+    transaction_id: str
+    status: str
+    priority: str
+    assigned_to: str | None = None
+
+    created_at: str
+    updated_at: str
+
+    risk_score: float
+    risk_level: str
+    decision: str
+    primary_reason: str
+    evidence_text: str
+
+    model_probability: float
+    network_score: float
+    investigation_narrative: str
+
+
+class CaseListResponse(BaseModel):
+    cases: list[CaseResponse]
+    total: int
+
+
+class CaseAssignRequest(BaseModel):
+    investigator: str = Field(min_length=1, max_length=200)
+    actor: str = Field(default="system", min_length=1, max_length=200)
+
+
+class CaseTransitionRequest(BaseModel):
+    status: str = Field(min_length=1)
+    actor: str = Field(default="system", min_length=1, max_length=200)
+    details: str = Field(default="", max_length=2000)
+
+
+class AuditEventResponse(BaseModel):
+    case_id: str
+    timestamp: str
+    action: str
+    actor: str
+    from_status: str | None = None
+    to_status: str | None = None
+    details: str
+
+
+class AuditResponse(BaseModel):
+    case_id: str
+    events: list[AuditEventResponse]
+    total: int
 
 
 class ErrorResponse(BaseModel):

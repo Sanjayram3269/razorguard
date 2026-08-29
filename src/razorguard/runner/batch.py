@@ -264,6 +264,116 @@ def score_batch(
 
     return scored, queue
 
+def score_runtime_transaction(
+    transaction: dict[str, Any],
+    model: Any,
+    context_store: Any,
+) -> dict[str, Any]:
+    """
+    Score one live transaction using historical runtime context.
+
+    The context store supplies only transactions strictly before
+    the incoming transaction. The incoming transaction is appended
+    as the final event and is therefore never used to calculate
+    its own historical features.
+
+    Returns a single scored transaction record.
+    """
+
+    scoring_frame = (
+        context_store.build_scoring_frame(
+            transaction
+        )
+    )
+
+    model_frame = build_model_frame(
+        scoring_frame,
+        include_label=True,
+    )
+
+    network_frame = add_network_risk_features(
+        scoring_frame
+    )
+
+    # The runtime transaction is the final row because
+    # RuntimeContextStore appends it after historical data.
+    current_index = len(model_frame) - 1
+
+    model_input = model_frame[
+        NUMERIC_FEATURES
+        + CATEGORICAL_FEATURES
+    ]
+
+    probabilities = (
+        pd.DataFrame(
+            model.predict_proba(
+                model_input
+            )
+        )
+        .iloc[:, 1]
+        .to_numpy(dtype=float)
+    )
+
+    network_scores = (
+        network_frame[
+            "network_risk_score"
+        ]
+        .to_numpy(dtype=float)
+    )
+
+    current_row = model_frame.iloc[
+        current_index
+    ]
+
+    probability = float(
+        probabilities[current_index]
+    )
+
+    network_score = float(
+        network_scores[current_index]
+    )
+
+    behavior = behavioral_signal(
+        current_row
+    )
+
+    case = score_transaction(
+        transaction=current_row.to_dict(),
+        model_probability=probability,
+        network_score=network_score,
+        behavioral_signal=behavior,
+    )
+
+    enriched = enrich_case(
+        case=case,
+        transaction=current_row.to_dict(),
+        behavioral_signal=behavior,
+    )
+
+    return {
+        "transaction_id": case.transaction_id,
+        "model_probability": (
+            case.model_probability
+        ),
+        "network_score": (
+            case.network_score
+        ),
+        "behavioral_signal": round(
+            behavior,
+            6,
+        ),
+        "risk_score": case.risk_score,
+        "risk_level": case.risk_level,
+        "decision": case.decision,
+        "primary_reason": (
+            case.primary_reason
+        ),
+        "evidence_text": " | ".join(
+            case.evidence
+        ),
+        "case": enriched,
+    }
+
 
 def run_batch(
     transactions_path: Path = TRANSACTIONS_PATH,
