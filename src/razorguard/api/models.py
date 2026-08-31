@@ -64,6 +64,9 @@ class CaseResponse(BaseModel):
 class CaseListResponse(BaseModel):
     cases: list[CaseResponse]
     total: int
+    page: int = 1
+    page_size: int = 50
+    total_pages: int = 1
 
 
 class CaseAssignRequest(BaseModel):
@@ -95,3 +98,134 @@ class AuditResponse(BaseModel):
 
 class ErrorResponse(BaseModel):
     detail: str
+
+class DashboardSummaryResponse(BaseModel):
+    open_cases: int
+    critical_cases: int
+    high_cases: int
+    medium_cases: int
+    low_cases: int
+    average_risk_score: float
+    total_cases: int
+
+class DashboardDistributionItem(BaseModel):
+    label: str
+    count: int
+    percentage: float
+
+
+class DashboardActivityItem(BaseModel):
+    case_id: str
+    transaction_id: str
+    action: str
+    actor: str
+    timestamp: str
+    details: str
+
+
+class DashboardQueueItem(BaseModel):
+    case_id: str
+    transaction_id: str
+    priority: str
+    risk_score: float
+    risk_level: str
+    decision: str
+    primary_reason: str
+
+
+class DashboardDistributionResponse(BaseModel):
+    items: list[DashboardDistributionItem]
+    total: int
+
+
+class DashboardActivityResponse(BaseModel):
+    items: list[DashboardActivityItem]
+    total: int
+
+
+class DashboardQueueResponse(BaseModel):
+    items: list[DashboardQueueItem]
+    total: int
+
+class NetworkSummaryResponse(BaseModel):
+    accounts: int
+    devices: int
+    merchants: int
+
+    account_device_edges: int
+    account_merchant_edges: int
+    device_merchant_edges: int
+
+
+class NetworkRiskSignals(BaseModel):
+    device_shared: bool
+    merchant_shared: bool
+    new_device_for_account: bool
+    new_merchant_for_account: bool
+
+class RiskClusterSignal(BaseModel):
+    type: str
+    severity: str
+    value: int
+    evidence: str
+
+
+class RiskClusterTimelineItem(BaseModel):
+    transaction_id: str
+    timestamp: str
+    account_id: str
+    device_id: str
+    merchant_id: str
+
+
+class RiskClusterResponse(BaseModel):
+    cluster_id: str
+    cluster_type: str
+    risk_score: float
+
+    accounts: list[str]
+    devices: list[str]
+    merchants: list[str]
+    transactions: list[str]
+
+    signals: list[RiskClusterSignal]
+    evidence: list[str]
+    timeline: list[RiskClusterTimelineItem]
+
+class NetworkTransactionResponse(BaseModel):
+    transaction_id: str
+    timestamp: str
+
+    account_id: str
+    device_id: str
+    merchant_id: str
+
+    account_history_count: int
+    accounts_seen_on_device: list[str]
+    accounts_seen_at_merchant: list[str]
+
+    related_transaction_count: int
+
+    network_risk_signals: NetworkRiskSignals
+
+class AnalyticsDistributionItem(BaseModel):
+    label: str
+    count: int
+    percentage: float
+
+
+class AnalyticsMetricResponse(BaseModel):
+    total_cases: int
+    average_risk_score: float
+    median_risk_score: float
+    maximum_risk_score: float
+
+    average_model_probability: float
+    average_network_score: float
+
+    priority_distribution: list[AnalyticsDistributionItem]
+    risk_level_distribution: list[AnalyticsDistributionItem]
+    decision_distribution: list[AnalyticsDistributionItem]
+    status_distribution: list[AnalyticsDistributionItem]
+
+    top_reasons: list[AnalyticsDistributionItem]

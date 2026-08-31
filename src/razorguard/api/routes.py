@@ -7,16 +7,32 @@ import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
 
 from razorguard.api.models import (
+    AnalyticsDistributionItem,
+    AnalyticsMetricResponse,
     AuditEventResponse,
     AuditResponse,
     CaseAssignRequest,
     CaseListResponse,
     CaseResponse,
     CaseTransitionRequest,
+    DashboardActivityItem,
+    DashboardActivityResponse,
+    DashboardDistributionItem,
+    DashboardDistributionResponse,
+    DashboardQueueItem,
+    DashboardQueueResponse,
+    DashboardSummaryResponse,
     ErrorResponse,
+    NetworkRiskSignals,
+    NetworkSummaryResponse,
+    NetworkTransactionResponse,
     TransactionScoreRequest,
     TransactionScoreResponse,
+    RiskClusterResponse,
+    RiskClusterSignal,
+    RiskClusterTimelineItem,
 )
+
 from razorguard.config import TRANSACTIONS_PATH
 from razorguard.investigation.store import CaseStore
 from razorguard.runner.batch import (
@@ -25,6 +41,18 @@ from razorguard.runner.batch import (
 )
 from razorguard.runtime.context import RuntimeContextStore
 
+from razorguard.graph.builder import (
+    build_entity_graph,
+    graph_summary,
+)
+
+from razorguard.graph.investigator import (
+    investigate_transaction,
+)
+
+from razorguard.graph.clusters import (
+    build_risk_cluster,
+)
 
 router = APIRouter(
     prefix="/v1",
@@ -369,6 +397,238 @@ def score_transaction_api(
         case_id=case_id,
     )
 
+# ============================================================
+# NETWORK INTELLIGENCE
+# ============================================================
+
+
+@router.get(
+    "/network/summary",
+    response_model=NetworkSummaryResponse,
+)
+def network_summary() -> NetworkSummaryResponse:
+    """
+    Return graph-level network intelligence statistics.
+    """
+
+    try:
+        transactions = pd.read_parquet(
+            TRANSACTIONS_PATH
+        )
+
+        graph = build_entity_graph(
+            transactions
+        )
+
+        summary = graph_summary(
+            graph
+        )
+
+        return NetworkSummaryResponse(
+            **summary
+        )
+
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "transaction dataset unavailable: "
+                f"{exc}"
+            ),
+        ) from exc
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "network summary failed: "
+                f"{type(exc).__name__}: {exc}"
+            ),
+        ) from exc
+
+@router.get(
+    "/network/transaction/{transaction_id}/cluster",
+    response_model=RiskClusterResponse,
+)
+def network_transaction_cluster(
+    transaction_id: str,
+) -> RiskClusterResponse:
+    """
+    Return coordinated-risk cluster intelligence for one
+    transaction.
+    """
+
+    try:
+        transactions = pd.read_parquet(
+            TRANSACTIONS_PATH
+        )
+
+        transaction_matches = transactions[
+            transactions["transaction_id"].astype(str)
+            == str(transaction_id)
+        ]
+
+        if transaction_matches.empty:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"transaction not found: "
+                    f"{transaction_id}"
+                ),
+            )
+
+        transaction = transaction_matches.iloc[0]
+
+        cluster = build_risk_cluster(
+            transactions,
+            account_id=str(
+                transaction["account_id"]
+            ),
+            device_id=str(
+                transaction["device_id"]
+            ),
+            merchant_id=str(
+                transaction["merchant_id"]
+            ),
+            cluster_id=(
+                f"FR-{str(transaction_id)}"
+            ),
+        )
+
+        return RiskClusterResponse(
+            cluster_id=cluster.cluster_id,
+            cluster_type=cluster.cluster_type,
+            risk_score=cluster.risk_score,
+            accounts=cluster.accounts,
+            devices=cluster.devices,
+            merchants=cluster.merchants,
+            transactions=cluster.transactions,
+            signals=[
+                RiskClusterSignal(
+                    **signal
+                )
+                for signal in cluster.signals
+            ],
+            evidence=cluster.evidence,
+            timeline=[
+                RiskClusterTimelineItem(
+                    **item
+                )
+                for item in cluster.timeline
+            ],
+        )
+
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "transaction dataset unavailable: "
+                f"{exc}"
+            ),
+        ) from exc
+
+    except HTTPException:
+        raise
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "network cluster investigation failed: "
+                f"{type(exc).__name__}: {exc}"
+            ),
+        ) from exc
+    
+@router.get(
+    "/network/transaction/{transaction_id}",
+    response_model=NetworkTransactionResponse,
+)
+def network_transaction(
+    transaction_id: str,
+) -> NetworkTransactionResponse:
+    """
+    Return explainable network context for one transaction.
+    """
+
+    try:
+        transactions = pd.read_parquet(
+            TRANSACTIONS_PATH
+        )
+
+        result = investigate_transaction(
+            transactions=transactions,
+            transaction_id=transaction_id,
+        )
+
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "transaction dataset unavailable: "
+                f"{exc}"
+            ),
+        ) from exc
+
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"transaction not found: "
+                f"{transaction_id}"
+            ),
+        ) from exc
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "network investigation failed: "
+                f"{type(exc).__name__}: {exc}"
+            ),
+        ) from exc
+
+    return NetworkTransactionResponse(
+        transaction_id=str(
+            result["transaction_id"]
+        ),
+        timestamp=str(
+            result["timestamp"]
+        ),
+        account_id=str(
+            result["account_id"]
+        ),
+        device_id=str(
+            result["device_id"]
+        ),
+        merchant_id=str(
+            result["merchant_id"]
+        ),
+        account_history_count=int(
+            result["account_history_count"]
+        ),
+        accounts_seen_on_device=[
+            str(item)
+            for item in result[
+                "accounts_seen_on_device"
+            ]
+        ],
+        accounts_seen_at_merchant=[
+            str(item)
+            for item in result[
+                "accounts_seen_at_merchant"
+            ]
+        ],
+        related_transaction_count=int(
+            result[
+                "related_transaction_count"
+            ]
+        ),
+        network_risk_signals=NetworkRiskSignals(
+            **result[
+                "network_risk_signals"
+            ]
+        ),
+    )
 
 # ============================================================
 # CASE MANAGEMENT
@@ -389,9 +649,47 @@ def list_cases(
     priority: str | None = Query(
         default=None
     ),
+    search: str | None = Query(
+        default=None,
+        min_length=1,
+        max_length=200,
+    ),
+    sort_by: str = Query(
+        default="risk_score"
+    ),
+    sort_order: str = Query(
+        default="desc"
+    ),
+    page: int = Query(
+        default=1,
+        ge=1,
+    ),
+    page_size: int = Query(
+        default=50,
+        ge=1,
+        le=200,
+    ),
 ) -> CaseListResponse:
     """
-    List investigator cases with optional filters.
+    List investigator cases with server-side filtering,
+    searching, sorting, and pagination.
+
+    Supported filters:
+        status
+        assigned_to
+        priority
+        search
+
+    Supported sorting:
+        risk_score
+        model_probability
+        network_score
+        created_at
+        updated_at
+        transaction_id
+        case_id
+        priority
+        status
     """
 
     store = _case_store()
@@ -409,16 +707,142 @@ def list_cases(
             detail=str(exc),
         ) from exc
 
+    # --------------------------------------------------------
+    # Search
+    # --------------------------------------------------------
+
+    if search is not None:
+        query = search.strip().lower()
+
+        if query:
+            searchable = (
+                frame["case_id"]
+                .fillna("")
+                .astype(str)
+                .str.lower()
+                .str.contains(
+                    query,
+                    regex=False,
+                )
+                |
+                frame["transaction_id"]
+                .fillna("")
+                .astype(str)
+                .str.lower()
+                .str.contains(
+                    query,
+                    regex=False,
+                )
+                |
+                frame["primary_reason"]
+                .fillna("")
+                .astype(str)
+                .str.lower()
+                .str.contains(
+                    query,
+                    regex=False,
+                )
+            )
+
+            frame = frame[searchable]
+
+    # --------------------------------------------------------
+    # Sorting
+    # --------------------------------------------------------
+
+    allowed_sort_fields = {
+        "risk_score",
+        "model_probability",
+        "network_score",
+        "created_at",
+        "updated_at",
+        "transaction_id",
+        "case_id",
+        "priority",
+        "status",
+    }
+
+    sort_by = sort_by.lower()
+
+    if sort_by not in allowed_sort_fields:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"invalid sort_by: {sort_by}. "
+                f"Allowed values: "
+                f"{', '.join(sorted(allowed_sort_fields))}"
+            ),
+        )
+
+    sort_order = sort_order.lower()
+
+    if sort_order not in {
+        "asc",
+        "desc",
+    }:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "sort_order must be either "
+                "'asc' or 'desc'"
+            ),
+        )
+
+    ascending = sort_order == "asc"
+
+    frame = frame.sort_values(
+        by=sort_by,
+        ascending=ascending,
+        kind="stable",
+    ).reset_index(
+        drop=True
+    )
+
+    # --------------------------------------------------------
+    # Pagination
+    # --------------------------------------------------------
+
+    total = len(frame)
+
+    total_pages = max(
+        1,
+        (total + page_size - 1)
+        // page_size,
+    )
+
+    if total > 0 and page > total_pages:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"page {page} is out of range; "
+                f"total_pages={total_pages}"
+            ),
+        )
+
+    start = (
+        (page - 1)
+        * page_size
+    )
+
+    end = start + page_size
+
+    page_frame = frame.iloc[
+        start:end
+    ]
+
     cases = [
         _case_response(
             row.to_dict()
         )
-        for _, row in frame.iterrows()
+        for _, row in page_frame.iterrows()
     ]
 
     return CaseListResponse(
         cases=cases,
-        total=len(cases),
+        total=total,
+        page=page,
+        page_size=page_size,
+        total_pages=total_pages,
     )
 
 
@@ -604,4 +1028,424 @@ def get_case_audit_api(
         case_id=case_id,
         events=events,
         total=len(events),
+    )
+
+# ============================================================
+# DASHBOARD SUMMARY
+# ============================================================
+
+@router.get(
+    "/dashboard/summary",
+    response_model=DashboardSummaryResponse,
+)
+def dashboard_summary() -> DashboardSummaryResponse:
+    """
+    Return aggregate investigator dashboard metrics.
+    """
+
+    store = _case_store()
+
+    frame = store.list()
+
+    if frame.empty:
+        return DashboardSummaryResponse(
+            open_cases=0,
+            critical_cases=0,
+            high_cases=0,
+            medium_cases=0,
+            low_cases=0,
+            average_risk_score=0.0,
+            total_cases=0,
+        )
+
+    open_cases = int(
+        (~frame["status"].isin(
+            ["RESOLVED", "DISMISSED"]
+        )).sum()
+    )
+
+    critical_cases = int(
+        (frame["priority"] == "CRITICAL").sum()
+    )
+
+    high_cases = int(
+        (frame["priority"] == "HIGH").sum()
+    )
+
+    medium_cases = int(
+        (frame["priority"] == "MEDIUM").sum()
+    )
+
+    low_cases = int(
+        (frame["priority"] == "LOW").sum()
+    )
+
+    average_risk_score = round(
+        float(frame["risk_score"].mean()),
+        4,
+    )
+
+    return DashboardSummaryResponse(
+        open_cases=open_cases,
+        critical_cases=critical_cases,
+        high_cases=high_cases,
+        medium_cases=medium_cases,
+        low_cases=low_cases,
+        average_risk_score=average_risk_score,
+        total_cases=int(len(frame)),
+    )
+
+# ============================================================
+# DASHBOARD DISTRIBUTION
+# ============================================================
+
+
+@router.get(
+    "/dashboard/distribution",
+    response_model=DashboardDistributionResponse,
+)
+def dashboard_distribution() -> DashboardDistributionResponse:
+    """
+    Return risk-priority distribution for dashboard visualization.
+    """
+
+    store = _case_store()
+
+    frame = store.list()
+
+    if frame.empty:
+        return DashboardDistributionResponse(
+            items=[],
+            total=0,
+        )
+
+    total = len(frame)
+
+    counts = (
+        frame["priority"]
+        .fillna("UNKNOWN")
+        .astype(str)
+        .str.upper()
+        .value_counts()
+    )
+
+    ordered_labels = [
+        "CRITICAL",
+        "HIGH",
+        "MEDIUM",
+        "LOW",
+    ]
+
+    items = []
+
+    for label in ordered_labels:
+        count = int(
+            counts.get(
+                label,
+                0,
+            )
+        )
+
+        items.append(
+            DashboardDistributionItem(
+                label=label,
+                count=count,
+                percentage=round(
+                    (count / total) * 100,
+                    2,
+                )
+                if total
+                else 0.0,
+            )
+        )
+
+    return DashboardDistributionResponse(
+        items=items,
+        total=total,
+    )
+
+
+# ============================================================
+# DASHBOARD RECENT ACTIVITY
+# ============================================================
+
+
+@router.get(
+    "/dashboard/activity",
+    response_model=DashboardActivityResponse,
+)
+def dashboard_activity(
+    limit: int = Query(
+        default=10,
+        ge=1,
+        le=50,
+    ),
+) -> DashboardActivityResponse:
+    """
+    Return the most recent investigator activity.
+    """
+
+    store = _case_store()
+
+    audit = store._load_audit()
+
+    if audit.empty:
+        return DashboardActivityResponse(
+            items=[],
+            total=0,
+        )
+
+    audit = audit.sort_values(
+        "timestamp",
+        ascending=False,
+        kind="stable",
+    ).head(limit)
+
+    items = [
+        DashboardActivityItem(
+            case_id=str(row["case_id"]),
+            transaction_id=(
+                str(row["case_id"])
+                .replace("CASE-", "", 1)
+            ),
+            action=str(row["action"]),
+            actor=str(row["actor"]),
+            timestamp=str(row["timestamp"]),
+            details=str(row["details"]),
+        )
+        for _, row in audit.iterrows()
+    ]
+
+    return DashboardActivityResponse(
+        items=items,
+        total=len(items),
+    )
+
+
+# ============================================================
+# DASHBOARD PRIORITY QUEUE
+# ============================================================
+
+
+@router.get(
+    "/dashboard/queue",
+    response_model=DashboardQueueResponse,
+)
+def dashboard_queue(
+    limit: int = Query(
+        default=10,
+        ge=1,
+        le=50,
+    ),
+) -> DashboardQueueResponse:
+    """
+    Return the highest-priority actionable cases.
+    """
+
+    store = _case_store()
+
+    frame = store.list()
+
+    if frame.empty:
+        return DashboardQueueResponse(
+            items=[],
+            total=0,
+        )
+
+    actionable = frame[
+        ~frame["status"].isin(
+            [
+                "RESOLVED",
+                "DISMISSED",
+            ]
+        )
+    ].copy()
+
+    if actionable.empty:
+        return DashboardQueueResponse(
+            items=[],
+            total=0,
+        )
+
+    decision_priority = {
+        "BLOCK": 0,
+        "REVIEW": 1,
+        "ALLOW": 2,
+    }
+
+    actionable["_decision_priority"] = (
+        actionable["decision"]
+        .map(decision_priority)
+        .fillna(99)
+    )
+
+    actionable = (
+        actionable
+        .sort_values(
+            [
+                "_decision_priority",
+                "risk_score",
+                "model_probability",
+                "network_score",
+            ],
+            ascending=[
+                True,
+                False,
+                False,
+                False,
+            ],
+            kind="stable",
+        )
+        .head(limit)
+    )
+
+    items = [
+        DashboardQueueItem(
+            case_id=str(row["case_id"]),
+            transaction_id=str(row["transaction_id"]),
+            priority=str(row["priority"]),
+            risk_score=float(row["risk_score"]),
+            risk_level=str(row["risk_level"]),
+            decision=str(row["decision"]),
+            primary_reason=str(row["primary_reason"]),
+        )
+        for _, row in actionable.iterrows()
+    ]
+
+    return DashboardQueueResponse(
+        items=items,
+        total=len(items),
+    )
+
+# ============================================================
+# RISK ANALYTICS
+# ============================================================
+
+@router.get(
+    "/analytics/overview",
+    response_model=AnalyticsMetricResponse,
+)
+def analytics_overview() -> AnalyticsMetricResponse:
+    """
+    Return aggregate risk analytics for investigator cases.
+
+    Analytics are calculated server-side from the persistent
+    investigator case store so the frontend does not need to
+    download the complete case dataset.
+    """
+
+    store = _case_store()
+    frame = store.list()
+
+    if frame.empty:
+        empty = []
+
+        return AnalyticsMetricResponse(
+            total_cases=0,
+            average_risk_score=0.0,
+            median_risk_score=0.0,
+            maximum_risk_score=0.0,
+            average_model_probability=0.0,
+            average_network_score=0.0,
+            priority_distribution=empty,
+            risk_level_distribution=empty,
+            decision_distribution=empty,
+            status_distribution=empty,
+            top_reasons=empty,
+        )
+
+    total = len(frame)
+
+    def distribution(column: str) -> list[dict]:
+        counts = (
+            frame[column]
+            .fillna("UNKNOWN")
+            .astype(str)
+            .value_counts()
+        )
+
+        return [
+            {
+                "label": str(label),
+                "count": int(count),
+                "percentage": round(
+                    (float(count) / total) * 100,
+                    2,
+                ),
+            }
+            for label, count in counts.items()
+        ]
+
+    reasons = (
+        frame["primary_reason"]
+        .fillna("Unknown")
+        .astype(str)
+        .value_counts()
+        .head(8)
+    )
+
+    top_reasons = [
+        {
+            "label": str(label),
+            "count": int(count),
+            "percentage": round(
+                (float(count) / total) * 100,
+                2,
+            ),
+        }
+        for label, count in reasons.items()
+    ]
+
+    return AnalyticsMetricResponse(
+        total_cases=int(total),
+
+        average_risk_score=round(
+            float(frame["risk_score"].mean()),
+            2,
+        ),
+
+        median_risk_score=round(
+            float(frame["risk_score"].median()),
+            2,
+        ),
+
+        maximum_risk_score=round(
+            float(frame["risk_score"].max()),
+            2,
+        ),
+
+        average_model_probability=round(
+            float(frame["model_probability"].mean()),
+            4,
+        ),
+
+        average_network_score=round(
+            float(frame["network_score"].mean()),
+            2,
+        ),
+
+        priority_distribution=[
+            AnalyticsDistributionItem(**item)
+            for item in distribution("priority")
+        ],
+
+        risk_level_distribution=[
+            AnalyticsDistributionItem(**item)
+            for item in distribution("risk_level")
+        ],
+
+        decision_distribution=[
+            AnalyticsDistributionItem(**item)
+            for item in distribution("decision")
+        ],
+
+        status_distribution=[
+            AnalyticsDistributionItem(**item)
+            for item in distribution("status")
+        ],
+
+        top_reasons=[
+            AnalyticsDistributionItem(**item)
+            for item in top_reasons
+        ],
     )
