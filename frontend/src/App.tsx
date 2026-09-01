@@ -2107,16 +2107,28 @@ function Investigation({
         </span>
       </div>
 
-      <div className="investigation-grid">
-        <div className="panel investigation-score">
-          <span className="panel-eyebrow">
-            RISK SCORE
-          </span>
-
-          <div className="big-score">
+      {/* Risk Summary Bar */}
+      <div className="investigation-summary-bar">
+        <div className="investigation-summary-item">
+          <span className="panel-eyebrow">RISK</span>
+          <strong className="big-score-inline">
             {formatScore(caseData.risk_score)}
-          </div>
+          </strong>
+        </div>
 
+        <div className="investigation-summary-divider" />
+
+        <div className="investigation-summary-item">
+          <span className="panel-eyebrow">DECISION</span>
+          <strong className={`decision-badge decision-${caseData.decision.toLowerCase()}`}>
+            {caseData.decision}
+          </strong>
+        </div>
+
+        <div className="investigation-summary-divider" />
+
+        <div className="investigation-summary-item">
+          <span className="panel-eyebrow">STATUS</span>
           <span
             className={`status-badge ${statusClass(
               caseData.status,
@@ -2126,101 +2138,189 @@ function Investigation({
           </span>
         </div>
 
-        <div className="panel">
-          <div className="panel-heading">
-            <div>
-              <span className="panel-eyebrow">
-                RISK SIGNALS
-              </span>
+        <div className="investigation-summary-divider" />
 
-              <h2>
-                Decision context
-              </h2>
-            </div>
+        <div className="investigation-summary-item">
+          <span className="panel-eyebrow">MODEL</span>
+          <strong>
+            {formatScore(
+              caseData.model_probability * 100,
+            )}
+          </strong>
+        </div>
 
-            <ShieldAlert size={17} />
+        <div className="investigation-summary-divider" />
+
+        <div className="investigation-summary-item">
+          <span className="panel-eyebrow">NETWORK</span>
+          <strong>
+            {formatScore(caseData.network_score)}
+          </strong>
+        </div>
+
+        <div className="investigation-summary-divider" />
+
+        <div className="investigation-summary-item">
+          <span className="panel-eyebrow">ASSIGNED</span>
+          <strong>
+            {caseData.assigned_to ?? "Unassigned"}
+          </strong>
+        </div>
+      </div>
+
+      {/* Primary Reason */}
+      <div className="panel investigation-panel">
+        <div className="panel-heading">
+          <div>
+            <span className="panel-eyebrow">PRIMARY REASON</span>
+            <h2>{caseData.primary_reason || "Risk indicators detected"}</h2>
           </div>
 
-          <div className="signal-grid">
-            <div>
-              <span>
-                Model probability
-              </span>
+          <ShieldAlert size={17} />
+        </div>
 
-              <strong>
-                {formatScore(
-                  caseData.model_probability * 100,
-                )}
-              </strong>
-            </div>
+        <div className="evidence-block">
+          <span className="panel-eyebrow">EVIDENCE</span>
+          <p>{caseData.evidence_text || "No evidence text recorded."}</p>
+        </div>
 
-            <div>
-              <span>
-                Network score
-              </span>
+        <div className="evidence-block">
+          <span className="panel-eyebrow">INVESTIGATION NARRATIVE</span>
+          <p>{caseData.investigation_narrative || "No investigation narrative recorded."}</p>
+        </div>
+      </div>
 
-              <strong>
-                {formatScore(caseData.network_score)}
-              </strong>
-            </div>
-
-            <div>
-              <span>
-                Decision
-              </span>
-
-              <strong>
-                {caseData.decision}
-              </strong>
-            </div>
-
-            <div>
-              <span>
-                Assigned investigator
-              </span>
-
-              <strong>
-                {caseData.assigned_to ?? "Unassigned"}
-              </strong>
-
-              <div className="case-action">
-                <input
-                  type="text"
-                  value={investigator}
-                  onChange={(event) =>
-                    setInvestigator(event.target.value)
-                  }
-                  placeholder="Investigator name"
-                  disabled={assignMutation.isPending}
-                />
-
-                <button
-                  className="refresh-button"
-                  onClick={() => assignMutation.mutate()}
-                  disabled={
-                    assignMutation.isPending ||
-                    !investigator.trim()
-                  }
-                >
-                  {assignMutation.isPending
-                    ? "Assigning..."
-                    : "Assign"}
-                </button>
-              </div>
-
-              {assignMutation.isError && (
-                <span className="action-error">
-                  Unable to assign investigator.
-                </span>
-              )}
-
-              {assignMutation.isSuccess && (
-                <span className="action-success">
-                  Investigator assigned successfully.
-                </span>
-              )}
-            </div>
+      {/* Case Actions */}
+      <div className="panel investigation-panel">
+        <div className="panel-heading">
+          <div>
+            <span className="panel-eyebrow">CASE ACTIONS</span>
+            <h2>Investigation workflow</h2>
           </div>
+
+          <ShieldAlert size={17} />
+        </div>
+
+        <div className="case-actions">
+          {caseData.status === "OPEN" && (
+            <button
+              className="refresh-button"
+              onClick={() =>
+                statusMutation.mutate({
+                  status: "IN_REVIEW",
+                  details: "Investigation review started by security analyst.",
+                })
+              }
+              disabled={statusMutation.isPending}
+            >
+              {statusMutation.isPending ? "Updating..." : "Start Review"}
+            </button>
+          )}
+
+          {caseData.status === "IN_REVIEW" && (
+            <>
+              <button
+                className="refresh-button"
+                onClick={() =>
+                  statusMutation.mutate({
+                    status: "ESCALATED",
+                    details: "Case escalated for additional investigation.",
+                  })
+                }
+                disabled={statusMutation.isPending}
+              >
+                {statusMutation.isPending ? "Updating..." : "Escalate"}
+              </button>
+
+              <button
+                className="refresh-button"
+                onClick={() =>
+                  statusMutation.mutate({
+                    status: "RESOLVED",
+                    details: "Investigation completed and case resolved.",
+                  })
+                }
+                disabled={statusMutation.isPending}
+              >
+                {statusMutation.isPending ? "Updating..." : "Resolve Case"}
+              </button>
+            </>
+          )}
+
+          {caseData.status === "ESCALATED" && (
+            <button
+              className="refresh-button"
+              onClick={() =>
+                statusMutation.mutate({
+                  status: "RESOLVED",
+                  details: "Escalated investigation completed and case resolved.",
+                })
+              }
+              disabled={statusMutation.isPending}
+            >
+              {statusMutation.isPending ? "Updating..." : "Resolve Case"}
+            </button>
+          )}
+
+          {caseData.status === "RESOLVED" && (
+            <div className="action-success">
+              <CheckCircle2 size={16} />
+              Case resolved. No further action required.
+            </div>
+          )}
+
+          {statusMutation.isError && (
+            <span className="action-error">
+              Unable to update case status. Please try again.
+            </span>
+          )}
+
+          {statusMutation.isSuccess && (
+            <span className="action-success">
+              Case status updated successfully.
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Investigator Assignment */}
+      <div className="panel investigation-panel">
+        <div className="panel-heading">
+          <div>
+            <span className="panel-eyebrow">INVESTIGATOR</span>
+            <h2>Assignment</h2>
+          </div>
+
+          <Users size={17} />
+        </div>
+
+        <div className="case-actions">
+          <div className="investigator-assign-row">
+            <input
+              type="text"
+              value={investigator}
+              onChange={(event) => setInvestigator(event.target.value)}
+              placeholder="Investigator name"
+              disabled={assignMutation.isPending}
+              className="investigator-input"
+            />
+
+            <button
+              className="refresh-button"
+              onClick={() => assignMutation.mutate()}
+              disabled={assignMutation.isPending || !investigator.trim()}
+            >
+              {assignMutation.isPending ? "Assigning..." : "Assign"}
+            </button>
+          </div>
+
+          {assignMutation.isError && (
+            <span className="action-error">Unable to assign investigator.</span>
+          )}
+
+          {assignMutation.isSuccess && (
+            <span className="action-success">Investigator assigned successfully.</span>
+          )}
         </div>
       </div>
 

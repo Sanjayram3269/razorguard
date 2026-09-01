@@ -1197,6 +1197,104 @@ a {
   padding: 25px;
 }
 
+/* Investigation Summary Bar */
+
+.investigation-summary-bar {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  margin-bottom: 16px;
+  padding: 16px 20px;
+  border: 1px solid #202a36;
+  border-radius: 10px;
+  background: #0d131a;
+  overflow-x: auto;
+}
+
+.investigation-summary-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0 16px;
+  min-width: 80px;
+}
+
+.investigation-summary-item:first-child {
+  padding-left: 0;
+}
+
+.investigation-summary-item:last-child {
+  padding-right: 0;
+}
+
+.investigation-summary-divider {
+  width: 1px;
+  height: 32px;
+  background: #1d2731;
+  flex-shrink: 0;
+}
+
+.big-score-inline {
+  color: #e5ebf2;
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.04em;
+}
+
+.decision-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 8px;
+  border-radius: 5px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.decision-block {
+  border: 1px solid #5c3438;
+  background: #25171a;
+  color: #d98282;
+}
+
+.decision-review {
+  border: 1px solid #4a3f2f;
+  background: #1e1a14;
+  color: #d1a269;
+}
+
+.decision-allow {
+  border: 1px solid #30483c;
+  background: #15231d;
+  color: #76b794;
+}
+
+.investigator-assign-row {
+  display: flex;
+  gap: 8px;
+  padding: 16px;
+}
+
+.investigator-input {
+  flex: 1;
+  padding: 9px 12px;
+  border: 1px solid #202a36;
+  border-radius: 8px;
+  background: #0d131a;
+  color: #c5ced9;
+  font-size: 11px;
+  outline: 0;
+}
+
+.investigator-input::placeholder {
+  color: #4e5b6b;
+}
+
+.investigator-input:focus {
+  border-color: #3a4b5f;
+}
+
 .big-score {
   margin: 13px 0 15px;
   color: #e5ebf2;
@@ -1457,6 +1555,25 @@ a {
 
   .distribution-row {
     grid-template-columns: 90px 1fr 32px;
+  }
+
+  .investigation-summary-bar {
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 12px;
+  }
+
+  .investigation-summary-divider {
+    display: none;
+  }
+
+  .investigation-summary-item {
+    min-width: 60px;
+    padding: 0 8px;
+  }
+
+  .investigator-assign-row {
+    flex-direction: column;
   }
 }
 
