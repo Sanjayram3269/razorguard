@@ -13,7 +13,6 @@ RazorGuard evidence.
 """
 from __future__ import annotations
 
-import json
 import logging
 import os
 from abc import ABC, abstractmethod
