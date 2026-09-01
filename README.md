@@ -40,7 +40,7 @@ Transaction-level fraud scores alone do not explain **coordinated** or **relatio
 │  Investigation Copilot                                      │
 │  ├── Evidence Context Builder (Bounded, Verified)           │
 │  ├── Grounded System Prompt (Never Overrides Decisions)     │
-│  ├── LLM Provider (OpenAI, Configurable)                    │
+│  ├── LLM Provider (OpenRouter / OpenAI / Null)              │
 │  └── Deterministic Fallback (When LLM Unavailable)          │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -130,10 +130,20 @@ npm run build
 
 ```bash
 # Optional: LLM Investigation Copilot
-OPENAI_API_KEY=sk-...        # OpenAI API key (backend only)
-OPENAI_MODEL=gpt-4o-mini     # Model to use (default: gpt-4o-mini)
-OPENAI_TIMEOUT=30             # Request timeout in seconds
+# OpenRouter (preferred — free tier available, no credit card):
+OPENROUTER_API_KEY=sk-or-...             # OpenRouter API key (backend only)
+OPENROUTER_MODEL=openrouter/free         # Free model router (default)
+OPENROUTER_TIMEOUT=30                     # Request timeout in seconds
+
+# OpenAI (alternative):
+OPENAI_API_KEY=sk-...                    # OpenAI API key (backend only)
+OPENAI_MODEL=gpt-4o-mini                 # Model to use
+OPENAI_TIMEOUT=30                         # Request timeout in seconds
 ```
+
+**Provider priority**: OpenRouter → OpenAI → Deterministic fallback.
+
+If no API key is configured, the copilot uses deterministic evidence-grounded fallback answers.
 
 **Security**: API keys are backend-only. They are never exposed to the React frontend.
 
@@ -238,7 +248,7 @@ The strongest evidence is found in cases with:
 | Backend | Python 3.12, FastAPI, Pydantic, pandas |
 | ML | scikit-learn (Logistic Regression) |
 | Storage | Parquet (file-based) |
-| LLM | OpenAI API (optional, via httpx) |
+| LLM | OpenRouter / OpenAI (optional, via httpx) |
 
 ---
 
@@ -247,7 +257,7 @@ The strongest evidence is found in cases with:
 - **File-based storage**: Uses Parquet files (not a database). Suitable for demo/prototype, not production scale.
 - **Single-server**: No distributed processing or horizontal scaling.
 - **Synthetic data**: Demo data is generated, not real transaction data.
-- **LLM dependency**: Copilot requires OpenAI API key. Without it, deterministic fallback is used.
+- **LLM dependency**: Copilot requires OpenRouter or OpenAI API key. Without either, deterministic fallback is used.
 - **No authentication**: No user auth or role-based access control.
 - **No real-time**: No WebSocket or streaming updates.
 

@@ -144,6 +144,22 @@ function statusClass(status: string) {
   return status.toLowerCase().replace("_", "-");
 }
 
+function displayInvestigator(
+  value: string | null | undefined,
+): string {
+  if (!value) return "Unassigned";
+  const trimmed = value.trim();
+  if (
+    !trimmed ||
+    trimmed.toLowerCase() === "nan" ||
+    trimmed.toLowerCase() === "none" ||
+    trimmed.toLowerCase() === "null"
+  ) {
+    return "Unassigned";
+  }
+  return trimmed;
+}
+
 /* ============================================================
    STAT CARD
 ============================================================ */
@@ -955,8 +971,9 @@ function Cases() {
                       </td>
 
                       <td>
-                        {item.assigned_to ??
-                          "Unassigned"}
+                        {displayInvestigator(
+                          item.assigned_to,
+                        )}
                       </td>
 
                       <td>
@@ -2163,7 +2180,7 @@ function Investigation({
         <div className="investigation-summary-item">
           <span className="panel-eyebrow">ASSIGNED</span>
           <strong>
-            {caseData.assigned_to ?? "Unassigned"}
+            {displayInvestigator(caseData.assigned_to)}
           </strong>
         </div>
       </div>
@@ -2324,154 +2341,6 @@ function Investigation({
         </div>
       </div>
 
-      <div className="panel investigation-panel">
-        <div className="panel-heading">
-          <div>
-            <span className="panel-eyebrow">
-              CASE ACTIONS
-            </span>
-
-            <h2>
-              Investigation workflow
-            </h2>
-          </div>
-
-          <ShieldAlert size={17} />
-        </div>
-
-        <div className="case-actions">
-          {caseData.status === "OPEN" && (
-            <button
-              className="refresh-button"
-              onClick={() =>
-                statusMutation.mutate({
-                  status: "IN_REVIEW",
-                  details:
-                    "Investigation review started by security analyst.",
-                })
-              }
-              disabled={statusMutation.isPending}
-            >
-              {statusMutation.isPending
-                ? "Updating..."
-                : "Start Review"}
-            </button>
-          )}
-
-          {caseData.status === "IN_REVIEW" && (
-            <>
-              <button
-                className="refresh-button"
-                onClick={() =>
-                  statusMutation.mutate({
-                    status: "ESCALATED",
-                    details:
-                      "Case escalated for additional investigation.",
-                  })
-                }
-                disabled={statusMutation.isPending}
-              >
-                {statusMutation.isPending
-                  ? "Updating..."
-                  : "Escalate"}
-              </button>
-
-              <button
-                className="refresh-button"
-                onClick={() =>
-                  statusMutation.mutate({
-                    status: "RESOLVED",
-                    details:
-                      "Investigation completed and case resolved.",
-                  })
-                }
-                disabled={statusMutation.isPending}
-              >
-                {statusMutation.isPending
-                  ? "Updating..."
-                  : "Resolve Case"}
-              </button>
-            </>
-          )}
-
-          {caseData.status === "ESCALATED" && (
-            <button
-              className="refresh-button"
-              onClick={() =>
-                statusMutation.mutate({
-                  status: "RESOLVED",
-                  details:
-                    "Escalated investigation completed and case resolved.",
-                })
-              }
-              disabled={statusMutation.isPending}
-            >
-              {statusMutation.isPending
-                ? "Updating..."
-                : "Resolve Case"}
-            </button>
-          )}
-
-          {caseData.status === "RESOLVED" && (
-            <div className="action-success">
-              <CheckCircle2 size={16} />
-              Case resolved. No further action required.
-            </div>
-          )}
-
-          {statusMutation.isError && (
-            <span className="action-error">
-              Unable to update case status. Please try again.
-            </span>
-          )}
-
-          {statusMutation.isSuccess && (
-            <span className="action-success">
-              Case status updated successfully.
-            </span>
-          )}
-        </div>
-      </div>
-
-      <div className="panel investigation-panel">
-        <div className="panel-heading">
-          <div>
-            <span className="panel-eyebrow">
-              PRIMARY REASON
-            </span>
-
-            <h2>
-              {caseData.primary_reason ||
-                "Risk indicators detected"}
-            </h2>
-          </div>
-
-          <ShieldAlert size={17} />
-        </div>
-
-        <div className="evidence-block">
-          <span className="panel-eyebrow">
-            EVIDENCE
-          </span>
-
-          <p>
-            {caseData.evidence_text ||
-              "No evidence text recorded."}
-          </p>
-        </div>
-
-        <div className="evidence-block">
-          <span className="panel-eyebrow">
-            INVESTIGATION NARRATIVE
-          </span>
-
-          <p>
-            {caseData.investigation_narrative ||
-              "No investigation narrative recorded."}
-          </p>
-        </div>
-      </div>
-
       <EvidenceGraphV2
         transactionId={
           caseData.transaction_id
@@ -2625,13 +2494,24 @@ function Investigators() {
   const assigned = cases.filter((item) => Boolean(item.assigned_to));
   const unassigned = cases.filter((item) => !item.assigned_to);
 
+  /* Normalize investigator names for grouping.
+     Use lowercase comparison to avoid duplicate groups
+     from inconsistent casing (e.g. "Sanjay" vs "sanjay").
+     Preserve the first-seen casing as display name. */
+  const canonicalMap = new Map<string, string>();
   const grouped = new Map<string, DashboardQueueItem[]>();
 
   assigned.forEach((item) => {
-    const name = item.assigned_to ?? "Unassigned";
-    const current = grouped.get(name) ?? [];
+    const raw = (item.assigned_to ?? "").trim();
+    if (!raw) return;
+    const key = raw.toLowerCase();
+    if (!canonicalMap.has(key)) {
+      canonicalMap.set(key, raw);
+    }
+    const displayName = canonicalMap.get(key)!;
+    const current = grouped.get(displayName) ?? [];
     current.push(item);
-    grouped.set(name, current);
+    grouped.set(displayName, current);
   });
 
   return (
@@ -3021,15 +2901,13 @@ function AppShell() {
             WORKSPACE
           </div>
 
-          <button className="workspace-selector">
+          <div className="workspace-selector" style={{ cursor: 'default' }}>
             <span className="workspace-dot" />
 
             <span>
               Fraud Operations
             </span>
-
-            <ChevronDown size={15} />
-          </button>
+          </div>
         </div>
 
         <nav className="navigation">

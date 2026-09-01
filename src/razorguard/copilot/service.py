@@ -20,6 +20,7 @@ from razorguard.copilot.provider import (
     CopilotResponse,
     LLMProvider,
     ProviderError,
+    ProviderTimeoutError,
     ProviderUnavailableError,
     get_provider,
 )

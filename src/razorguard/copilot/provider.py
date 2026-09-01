@@ -126,6 +126,8 @@ class OpenAIProvider(LLMProvider):
                 temperature=temperature,
                 max_tokens=max_tokens,
             )
+        except ProviderTimeoutError:
+            raise
         except ProviderUnavailableError:
             raise
         except Exception as exc:
@@ -190,6 +192,116 @@ class OpenAIProvider(LLMProvider):
 
 
 # ============================================================
+# OPENROUTER PROVIDER
+# ============================================================
+
+
+class OpenRouterProvider(LLMProvider):
+    """OpenRouter API provider.
+
+    Uses OpenRouter's OpenAI-compatible API endpoint.
+    Configuration:
+        OPENROUTER_API_KEY — required
+        OPENROUTER_MODEL  — model to use (default: openrouter/free)
+        OPENROUTER_TIMEOUT — request timeout in seconds (default: 30)
+    """
+
+    BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+    def __init__(self) -> None:
+        self._api_key = os.environ.get("OPENROUTER_API_KEY", "")
+        self._model = os.environ.get("OPENROUTER_MODEL", "openrouter/free")
+        self._timeout = int(os.environ.get("OPENROUTER_TIMEOUT", "30"))
+
+    def is_available(self) -> bool:
+        return bool(self._api_key)
+
+    def generate(
+        self,
+        system_prompt: str,
+        user_message: str,
+        *,
+        temperature: float = 0.3,
+        max_tokens: int = 1024,
+    ) -> str:
+        if not self._api_key:
+            raise ProviderUnavailableError(
+                "OpenRouter API key not configured"
+            )
+
+        try:
+            return self._generate_httpx(
+                system_prompt,
+                user_message,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+        except ProviderTimeoutError:
+            raise
+        except ProviderUnavailableError:
+            raise
+        except Exception as exc:
+            raise ProviderError(
+                f"OpenRouter request failed: {type(exc).__name__}: {exc}"
+            ) from exc
+
+    def _generate_httpx(
+        self,
+        system_prompt: str,
+        user_message: str,
+        *,
+        temperature: float = 0.3,
+        max_tokens: int = 1024,
+    ) -> str:
+        """Generate using httpx (minimal dependency)."""
+
+        try:
+            import httpx
+        except ImportError:
+            raise ProviderUnavailableError(
+                "httpx not installed; cannot call OpenRouter API"
+            )
+
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://razorguard.app",
+            "X-Title": "RazorGuard Investigation Copilot",
+        }
+
+        payload = {
+            "model": self._model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
+            ],
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+
+        try:
+            with httpx.Client(
+                timeout=self._timeout,
+            ) as client:
+                response = client.post(
+                    self.BASE_URL,
+                    headers=headers,
+                    json=payload,
+                )
+
+                response.raise_for_status()
+
+                data = response.json()
+
+                return data["choices"][0]["message"]["content"]
+
+        except httpx.TimeoutException as exc:
+            raise ProviderTimeoutError(
+                f"OpenRouter request timed out after {self._timeout}s"
+            ) from exc
+
+
+# ============================================================
 # PROVIDER FACTORY
 # ============================================================
 
@@ -200,8 +312,10 @@ _provider: LLMProvider | None = None
 def get_provider() -> LLMProvider:
     """Return the configured LLM provider (singleton).
 
-    Falls back to OpenAIProvider if OPENAI_API_KEY is set.
-    Returns an unavailable provider otherwise.
+    Priority:
+        1. OpenRouterProvider if OPENROUTER_API_KEY is set
+        2. OpenAIProvider if OPENAI_API_KEY is set
+        3. NullProvider (unavailable, deterministic fallback)
     """
 
     global _provider
@@ -209,7 +323,9 @@ def get_provider() -> LLMProvider:
     if _provider is not None:
         return _provider
 
-    if os.environ.get("OPENAI_API_KEY"):
+    if os.environ.get("OPENROUTER_API_KEY"):
+        _provider = OpenRouterProvider()
+    elif os.environ.get("OPENAI_API_KEY"):
         _provider = OpenAIProvider()
     else:
         _provider = _NullProvider()

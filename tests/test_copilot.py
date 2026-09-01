@@ -14,9 +14,14 @@ from razorguard.copilot.context import (
     build_copilot_context,
     context_to_prompt,
 )
+from unittest.mock import patch
+
 from razorguard.copilot.provider import (
     CopilotResponse,
     LLMProvider,
+    OpenRouterProvider,
+    ProviderError,
+    ProviderTimeoutError,
     ProviderUnavailableError,
     _NullProvider,
     get_provider,
@@ -543,3 +548,291 @@ class TestSecurity:
 
         assert "OPENAI_API_KEY" not in response.answer
         assert "api_key" not in response.answer.lower()
+
+    def test_no_openrouter_key_in_prompt(
+        self, sample_case, sample_evidence,
+    ):
+        ctx = build_copilot_context(
+            case=sample_case,
+            evidence=sample_evidence,
+            network_data=None,
+            cluster_data=None,
+            investigation_steps=[],
+            audit_events=[],
+            evidence_summary={},
+        )
+
+        prompt = context_to_prompt(ctx)
+
+        assert "OPENROUTER_API_KEY" not in prompt
+        assert "openrouter" not in prompt.lower()
+
+
+# ============================================================
+# OPENROUTER PROVIDER
+# ============================================================
+
+
+class TestOpenRouterProvider:
+    def test_unavailable_without_key(self):
+        with patch.dict("os.environ", {}, clear=True):
+            provider = OpenRouterProvider()
+            assert provider.is_available() is False
+
+    def test_available_with_key(self):
+        with patch.dict(
+            "os.environ",
+            {"OPENROUTER_API_KEY": "test-key-123"},
+        ):
+            provider = OpenRouterProvider()
+            assert provider.is_available() is True
+
+    def test_default_model(self):
+        with patch.dict(
+            "os.environ",
+            {"OPENROUTER_API_KEY": "test-key"},
+        ):
+            provider = OpenRouterProvider()
+            assert provider._model == "openrouter/free"
+
+    def test_custom_model(self):
+        with patch.dict(
+            "os.environ",
+            {
+                "OPENROUTER_API_KEY": "test-key",
+                "OPENROUTER_MODEL": "meta-llama/llama-3.2-3b-instruct:free",
+            },
+        ):
+            provider = OpenRouterProvider()
+            assert provider._model == "meta-llama/llama-3.2-3b-instruct:free"
+
+    def test_generate_raises_without_key(self):
+        with patch.dict("os.environ", {}, clear=True):
+            provider = OpenRouterProvider()
+            with pytest.raises(ProviderUnavailableError):
+                provider.generate("system", "user")
+
+    def test_generate_returns_response(self):
+        mock_response = {
+            "choices": [
+                {"message": {"content": "Test response from OpenRouter"}}
+            ]
+        }
+
+        with patch.dict(
+            "os.environ",
+            {"OPENROUTER_API_KEY": "test-key"},
+        ):
+            provider = OpenRouterProvider()
+
+            with patch(
+                "httpx.Client.post",
+                return_value=type(
+                    "Response",
+                    (),
+                    {
+                        "raise_for_status": lambda s: None,
+                        "json": lambda s: mock_response,
+                    },
+                )(),
+            ):
+                result = provider.generate("system", "user")
+                assert result == "Test response from OpenRouter"
+
+    def test_provider_factory_prefers_openrouter(self):
+        reset_provider()
+
+        with patch.dict(
+            "os.environ",
+            {
+                "OPENROUTER_API_KEY": "or-key",
+                "OPENAI_API_KEY": "oa-key",
+            },
+        ):
+            provider = get_provider()
+            assert isinstance(provider, OpenRouterProvider)
+
+        reset_provider()
+
+    def test_provider_factory_falls_back_to_openai(self):
+        reset_provider()
+
+        with patch.dict(
+            "os.environ",
+            {"OPENAI_API_KEY": "oa-key"},
+        ):
+            provider = get_provider()
+            assert type(provider).__name__ == "OpenAIProvider"
+
+        reset_provider()
+
+    def test_provider_factory_null_when_no_keys(self):
+        reset_provider()
+
+        with patch.dict("os.environ", {}, clear=True):
+            provider = get_provider()
+            assert isinstance(provider, _NullProvider)
+
+        reset_provider()
+
+    def test_provider_factory_singleton(self):
+        reset_provider()
+
+        with patch.dict("os.environ", {}, clear=True):
+            p1 = get_provider()
+            p2 = get_provider()
+            assert p1 is p2
+
+        reset_provider()
+
+    def test_reset_provider_clears_singleton(self):
+        reset_provider()
+
+        with patch.dict("os.environ", {}, clear=True):
+            p1 = get_provider()
+            reset_provider()
+            p2 = get_provider()
+            assert p1 is not p2
+
+    def test_timeout_configurable(self):
+        with patch.dict(
+            "os.environ",
+            {
+                "OPENROUTER_API_KEY": "key",
+                "OPENROUTER_TIMEOUT": "60",
+            },
+        ):
+            provider = OpenRouterProvider()
+            assert provider._timeout == 60
+
+    def test_answer_uses_openrouter_when_configured(
+        self, sample_case, sample_evidence,
+    ):
+        mock_response = {
+            "choices": [
+                {
+                    "message": {
+                        "content":
+                            "This case was flagged because of high risk.",
+                    }
+                }
+            ]
+        }
+
+        reset_provider()
+
+        with patch.dict(
+            "os.environ",
+            {"OPENROUTER_API_KEY": "test-key"},
+        ):
+            with patch(
+                "httpx.Client.post",
+                return_value=type(
+                    "Response",
+                    (),
+                    {
+                        "raise_for_status": lambda s: None,
+                        "json": lambda s: mock_response,
+                    },
+                )(),
+            ):
+                response = answer_question(
+                    question="Why was this case flagged?",
+                    case_context=sample_case,
+                    evidence=sample_evidence,
+                    network_data=None,
+                    cluster_data=None,
+                    investigation_steps=[],
+                    audit_events=[],
+                    evidence_summary={},
+                )
+
+                assert isinstance(response, CopilotResponse)
+                assert len(response.answer) > 0
+
+        reset_provider()
+
+    def test_openrouter_timeout_falls_back(
+        self, sample_case, sample_evidence,
+    ):
+        import httpx
+
+        reset_provider()
+
+        with patch.dict(
+            "os.environ",
+            {"OPENROUTER_API_KEY": "test-key"},
+        ):
+            with patch(
+                "httpx.Client.post",
+                side_effect=httpx.TimeoutException("timeout"),
+            ):
+                response = answer_question(
+                    question="Summarize this case",
+                    case_context=sample_case,
+                    evidence=sample_evidence,
+                    network_data=None,
+                    cluster_data=None,
+                    investigation_steps=[],
+                    audit_events=[],
+                    evidence_summary={},
+                )
+
+                # Falls back to deterministic
+                assert len(response.answer) > 0
+                assert response.grounding == "VERIFIED EVIDENCE"
+
+        reset_provider()
+
+    def test_openrouter_error_falls_back(
+        self, sample_case, sample_evidence,
+    ):
+        import httpx
+
+        reset_provider()
+
+        with patch.dict(
+            "os.environ",
+            {"OPENROUTER_API_KEY": "test-key"},
+        ):
+            with patch(
+                "httpx.Client.post",
+                side_effect=httpx.ConnectError("connection refused"),
+            ):
+                response = answer_question(
+                    question="What is the strongest evidence?",
+                    case_context=sample_case,
+                    evidence=sample_evidence,
+                    network_data=None,
+                    cluster_data=None,
+                    investigation_steps=[],
+                    audit_events=[],
+                    evidence_summary={},
+                )
+
+                # Falls back to deterministic
+                assert len(response.answer) > 0
+
+        reset_provider()
+
+    def test_openrouter_status_when_configured(self):
+        reset_provider()
+
+        with patch.dict(
+            "os.environ",
+            {"OPENROUTER_API_KEY": "test-key"},
+        ):
+            status = get_copilot_status()
+            assert status["available"] is True
+            assert status["provider"] == "OpenRouterProvider"
+
+        reset_provider()
+
+    def test_openrouter_status_when_not_configured(self):
+        reset_provider()
+
+        with patch.dict("os.environ", {}, clear=True):
+            status = get_copilot_status()
+            assert status["available"] is False
+
+        reset_provider()

@@ -164,6 +164,19 @@ def _case_response(
 ) -> CaseResponse:
     """Convert a CaseStore record into an API response."""
 
+    raw_assigned = case.get("assigned_to")
+    if raw_assigned is None or (
+        isinstance(raw_assigned, float)
+        and pd.isna(raw_assigned)
+    ):
+        normalized_assigned: str | None = None
+    elif str(raw_assigned).lower() in {
+        "nan", "none", "", "null",
+    }:
+        normalized_assigned = None
+    else:
+        normalized_assigned = str(raw_assigned)
+
     return CaseResponse(
         case_id=str(
             case["case_id"]
@@ -177,13 +190,7 @@ def _case_response(
         priority=str(
             case["priority"]
         ),
-        assigned_to=(
-            None
-            if case.get("assigned_to") is None
-            else str(
-                case["assigned_to"]
-            )
-        ),
+        assigned_to=normalized_assigned,
         created_at=str(
             case["created_at"]
         ),
