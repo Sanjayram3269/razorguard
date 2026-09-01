@@ -2,6 +2,7 @@ import { useState } from "react";
 import EvidenceGraph from "./components/EvidenceGraph";
 import EvidenceGraphV2 from "./components/EvidenceGraphV2";
 import CoordinatedEvidence from "./components/CoordinatedEvidence";
+import InvestigationCopilot from "./components/InvestigationCopilot";
 import InvestigationPath from "./components/InvestigationPath";
 import InvestigationTimeline from "./components/InvestigationTimeline";
 import {
@@ -9,6 +10,7 @@ import {
   AlertTriangle,
   BarChart3,
   Bell,
+  Bot,
   CheckCircle2,
   CircleHelp,
   Clock3,
@@ -2468,6 +2470,27 @@ function Investigation({
         </div>
 
         <InvestigationTimeline
+          caseId={caseData.case_id}
+        />
+      </div>
+
+      {/* Investigation Copilot */}
+      <div className="panel investigation-panel">
+        <div className="panel-heading">
+          <div>
+            <span className="panel-eyebrow">
+              INVESTIGATION COPILOT
+            </span>
+
+            <h2>
+              AI-assisted analysis
+            </h2>
+          </div>
+
+          <Bot size={17} />
+        </div>
+
+        <InvestigationCopilot
           caseId={caseData.case_id}
         />
       </div>

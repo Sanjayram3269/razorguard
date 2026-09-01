@@ -281,3 +281,25 @@ class CaseIntelligenceResponse(BaseModel):
     evidence: list[PrioritizedEvidenceResponse]
     investigation_steps: list[InvestigationStepResponse]
     evidence_summary: dict[str, int]
+
+
+# ============================================================
+# INVESTIGATION COPILOT
+# ============================================================
+
+
+class CopilotRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=1000)
+
+
+class CopilotResponse(BaseModel):
+    answer: str
+    key_evidence: list[str]
+    interpretation: str
+    recommended_focus: str
+    grounding: str
+
+
+class CopilotStatusResponse(BaseModel):
+    available: bool
+    provider: str

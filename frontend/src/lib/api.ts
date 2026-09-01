@@ -690,3 +690,43 @@ export async function fetchCaseIntelligence(
 
   return response.data;
 }
+
+
+/* ============================================================
+   INVESTIGATION COPILOT
+============================================================ */
+
+export interface CopilotStatusResponse {
+  available: boolean;
+  provider: string;
+}
+
+export interface CopilotResponseData {
+  answer: string;
+  key_evidence: string[];
+  interpretation: string;
+  recommended_focus: string;
+  grounding: string;
+}
+
+export async function fetchCopilotStatus(): Promise<CopilotStatusResponse> {
+  const response =
+    await api.get<CopilotStatusResponse>(
+      "/v1/copilot/status",
+    );
+
+  return response.data;
+}
+
+export async function askCopilot(
+  caseId: string,
+  question: string,
+): Promise<CopilotResponseData> {
+  const response =
+    await api.post<CopilotResponseData>(
+      `/v1/copilot/ask?case_id=${encodeURIComponent(caseId)}`,
+      { question },
+    );
+
+  return response.data;
+}
