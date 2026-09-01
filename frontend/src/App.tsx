@@ -2765,15 +2765,13 @@ function SettingsPage() {
     window.setTimeout(() => setSaved(false), 2200);
   };
 
-  return (
-    <div className="dashboard">
+    return (
+    <div className="dashboard settings-page">
       <div className="page-header">
         <div>
           <span className="eyebrow">SYSTEM</span>
           <h1>Settings</h1>
-          <p>
-            Configure investigator workspace preferences.
-          </p>
+          <p>Configure investigator workspace preferences.</p>
         </div>
 
         <button className="refresh-button" onClick={saveSettings}>
@@ -2782,7 +2780,8 @@ function SettingsPage() {
         </button>
       </div>
 
-      <div className="dashboard-grid">
+      <div className="settings-stack">
+        {/* Workspace preferences */}
         <div className="panel">
           <div className="panel-heading">
             <div>
@@ -2792,18 +2791,24 @@ function SettingsPage() {
             <Settings size={17} />
           </div>
 
-          <div className="signal-grid">
+          <div className="settings-options">
             <button
-              className={`network-signal ${autoRefresh ? "active" : ""}`}
+              type="button"
+              className={`settings-option ${
+                autoRefresh ? "active" : ""
+              }`}
               onClick={() => setAutoRefresh((value) => !value)}
-              style={{ border: 0, textAlign: "left", cursor: "pointer" }}
+              aria-pressed={autoRefresh}
             >
-              {autoRefresh ? (
-                <CheckCircle2 size={18} />
-              ) : (
-                <XCircle size={18} />
-              )}
-              <div>
+              <div className="settings-option-icon">
+                {autoRefresh ? (
+                  <CheckCircle2 size={18} />
+                ) : (
+                  <XCircle size={18} />
+                )}
+              </div>
+
+              <div className="settings-option-copy">
                 <strong>Automatic refresh</strong>
                 <span>
                   {autoRefresh
@@ -2811,30 +2816,45 @@ function SettingsPage() {
                     : "Disabled"}
                 </span>
               </div>
+
+              <span className="settings-status">
+                {autoRefresh ? "ON" : "OFF"}
+              </span>
             </button>
 
             <button
-              className={`network-signal ${compactMode ? "active" : ""}`}
+              type="button"
+              className={`settings-option ${
+                compactMode ? "active" : ""
+              }`}
               onClick={() => setCompactMode((value) => !value)}
-              style={{ border: 0, textAlign: "left", cursor: "pointer" }}
+              aria-pressed={compactMode}
             >
-              {compactMode ? (
-                <CheckCircle2 size={18} />
-              ) : (
-                <XCircle size={18} />
-              )}
-              <div>
+              <div className="settings-option-icon">
+                {compactMode ? (
+                  <CheckCircle2 size={18} />
+                ) : (
+                  <XCircle size={18} />
+                )}
+              </div>
+
+              <div className="settings-option-copy">
                 <strong>Compact workspace</strong>
                 <span>
                   {compactMode
-                    ? "Enabled"
-                    : "Standard density"}
+                    ? "Dense investigation layout enabled"
+                    : "Standard investigation density"}
                 </span>
               </div>
+
+              <span className="settings-status">
+                {compactMode ? "ON" : "OFF"}
+              </span>
             </button>
           </div>
         </div>
 
+        {/* Analyst profile */}
         <div className="panel">
           <div className="panel-heading">
             <div>
@@ -2844,19 +2864,41 @@ function SettingsPage() {
             <Users size={17} />
           </div>
 
-          <div className="signal-grid">
-            <div>
+          <div className="profile-grid">
+            <div className="profile-item">
               <span>Role</span>
               <strong>Security Analyst</strong>
             </div>
-            <div>
+
+            <div className="profile-item">
               <span>Workspace</span>
               <strong>Fraud Operations</strong>
             </div>
-            <div>
+
+            <div className="profile-item">
               <span>Engine</span>
-              <strong>Operational</strong>
+              <strong>
+                <span className="engine-status-dot" />
+                Operational
+              </strong>
             </div>
+          </div>
+        </div>
+
+        {/* Environment status */}
+        <div className="settings-status-panel">
+          <div>
+            <span className="panel-eyebrow">SYSTEM STATUS</span>
+            <h2>RazorGuard is operational</h2>
+            <p>
+              Risk intelligence, investigation workflows, network
+              analysis, and investigator assistance are available.
+            </p>
+          </div>
+
+          <div className="operational-badge">
+            <span className="engine-status-dot" />
+            Operational
           </div>
         </div>
       </div>
