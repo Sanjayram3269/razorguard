@@ -1,5 +1,9 @@
 import { useState } from "react";
 import EvidenceGraph from "./components/EvidenceGraph";
+import EvidenceGraphV2 from "./components/EvidenceGraphV2";
+import CoordinatedEvidence from "./components/CoordinatedEvidence";
+import InvestigationPath from "./components/InvestigationPath";
+import InvestigationTimeline from "./components/InvestigationTimeline";
 import {
   Activity,
   AlertTriangle,
@@ -10,6 +14,7 @@ import {
   Clock3,
   ChevronDown,
   FileSearch,
+  Layers,
   LayoutDashboard,
   Loader2,
   Network,
@@ -40,6 +45,7 @@ import {
   assignCase,
   fetchAnalyticsOverview,
   fetchCase,
+  fetchCaseIntelligence,
   fetchCasesFiltered,
   fetchDashboardActivity,
   fetchDashboardDistribution,
@@ -1975,6 +1981,19 @@ function Investigation({
   });
 
   /* ============================================================
+     CASE INTELLIGENCE
+  ============================================================ */
+
+  const {
+    data: intelligence,
+    isLoading: intelligenceLoading,
+  } = useQuery({
+    queryKey: ["case", caseId, "intelligence"],
+    queryFn: () => fetchCaseIntelligence(caseId!),
+    enabled: Boolean(caseId),
+  });
+
+  /* ============================================================
      NO CASE ID
   ============================================================ */
 
@@ -2349,6 +2368,108 @@ function Investigation({
               "No investigation narrative recorded."}
           </p>
         </div>
+      </div>
+
+      <EvidenceGraphV2
+        transactionId={
+          caseData.transaction_id
+        }
+      />
+
+      {/* Coordinated-Risk Evidence */}
+      {intelligence && (
+        <div className="panel investigation-panel">
+          <div className="panel-heading">
+            <div>
+              <span className="panel-eyebrow">
+                COORDINATED-RISK EVIDENCE
+              </span>
+
+              <h2>
+                Evidence synthesis
+              </h2>
+            </div>
+
+            <Layers size={17} />
+          </div>
+
+          {intelligenceLoading ? (
+            <div className="loading-state">
+              <Loader2
+                size={18}
+                className="spin"
+              />
+
+              Loading evidence...
+            </div>
+          ) : (
+            <CoordinatedEvidence
+              evidence={
+                intelligence.evidence
+              }
+              summary={
+                intelligence.evidence_summary
+              }
+            />
+          )}
+        </div>
+      )}
+
+      {/* Investigation Path */}
+      {intelligence && (
+        <div className="panel investigation-panel">
+          <div className="panel-heading">
+            <div>
+              <span className="panel-eyebrow">
+                NEXT BEST INVESTIGATION
+              </span>
+
+              <h2>
+                Investigation path
+              </h2>
+            </div>
+
+            <Search size={17} />
+          </div>
+
+          {intelligenceLoading ? (
+            <div className="loading-state">
+              <Loader2
+                size={18}
+                className="spin"
+              />
+
+              Loading investigation path...
+            </div>
+          ) : (
+            <InvestigationPath
+              steps={
+                intelligence.investigation_steps
+              }
+            />
+          )}
+        </div>
+      )}
+
+      {/* Investigation Timeline */}
+      <div className="panel investigation-panel">
+        <div className="panel-heading">
+          <div>
+            <span className="panel-eyebrow">
+              INVESTIGATION TIMELINE
+            </span>
+
+            <h2>
+              Audit history
+            </h2>
+          </div>
+
+          <Activity size={17} />
+        </div>
+
+        <InvestigationTimeline
+          caseId={caseData.case_id}
+        />
       </div>
     </div>
   );

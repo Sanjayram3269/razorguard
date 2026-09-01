@@ -625,15 +625,67 @@ export async function fetchCaseAudit(
 
 /* ============================================================
    TRANSACTION SCORING
-============================================================ */
-
-export async function scoreTransaction(
+============================================================ */export async function scoreTransaction(
   request: TransactionScoreRequest,
 ): Promise<TransactionScoreResponse> {
+  const response = await api.post<TransactionScoreResponse>(
+    "/v1/transactions/score",
+    request,
+  );
+
+  return response.data;
+}
+
+
+/* ============================================================
+   CASE INTELLIGENCE
+============================================================ */
+
+export interface EvidenceItemData {
+  title: string;
+  severity: string;
+  category: string;
+  explanation: string;
+  investigative_relevance: string;
+  supporting_entities: string[];
+  supporting_transactions: string[];
+  observed_value: string;
+}
+
+export interface PrioritizedEvidenceData extends EvidenceItemData {
+  tier: string;
+  priority_score: number;
+  rank: number;
+}
+
+export interface InvestigationStepData {
+  priority: number;
+  title: string;
+  reason: string;
+  supporting_evidence: string[];
+  target_entity: string;
+  navigation_target: string;
+}
+
+export interface CaseIntelligenceResponse {
+  case_id: string;
+  transaction_id: string;
+  risk_score: number;
+  risk_level: string;
+  decision: string;
+  primary_reason: string;
+
+  evidence: PrioritizedEvidenceData[];
+  investigation_steps: InvestigationStepData[];
+  evidence_summary: Record<string, number>;
+}
+
+export async function fetchCaseIntelligence(
+  caseId: string,
+): Promise<CaseIntelligenceResponse> {
   const response =
-    await api.post<TransactionScoreResponse>(
-      "/v1/transactions/score",
-      request,
+    await api.get<CaseIntelligenceResponse>(
+      `/v1/cases/${encodeURIComponent(caseId)}/intelligence`,
     );
 
   return response.data;

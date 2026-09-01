@@ -12,6 +12,7 @@ from razorguard.api.models import (
     AuditEventResponse,
     AuditResponse,
     CaseAssignRequest,
+    CaseIntelligenceResponse,
     CaseListResponse,
     CaseResponse,
     CaseTransitionRequest,
@@ -23,9 +24,11 @@ from razorguard.api.models import (
     DashboardQueueResponse,
     DashboardSummaryResponse,
     ErrorResponse,
+    InvestigationStepResponse,
     NetworkRiskSignals,
     NetworkSummaryResponse,
     NetworkTransactionResponse,
+    PrioritizedEvidenceResponse,
     TransactionScoreRequest,
     TransactionScoreResponse,
     RiskClusterResponse,
@@ -52,6 +55,21 @@ from razorguard.graph.investigator import (
 
 from razorguard.graph.clusters import (
     build_risk_cluster,
+)
+
+from razorguard.graph.evidence import (
+    build_coordinated_evidence,
+)
+
+from razorguard.graph.prioritization import (
+    prioritize_evidence,
+    group_by_tier,
+    prioritized_to_dict,
+)
+
+from razorguard.investigation.path import (
+    build_investigation_path,
+    step_to_dict,
 )
 
 router = APIRouter(
@@ -1448,4 +1466,298 @@ def analytics_overview() -> AnalyticsMetricResponse:
             AnalyticsDistributionItem(**item)
             for item in top_reasons
         ],
+    )
+
+
+# ============================================================
+# CASE INTELLIGENCE
+# ============================================================
+
+
+@router.get(
+    "/cases/{case_id}/intelligence",
+    response_model=CaseIntelligenceResponse,
+)
+def case_intelligence(
+    case_id: str,
+) -> CaseIntelligenceResponse:
+    """
+    Return coordinated-risk intelligence for one case.
+
+    Combines case data, network transaction intelligence,
+    cluster intelligence, evidence synthesis, and
+    investigation path into a single response.
+    """
+
+    store = _case_store()
+
+    case = store.get(case_id)
+
+    if case is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"case not found: {case_id}",
+        )
+
+    transaction_id = str(case["transaction_id"])
+
+    # --------------------------------------------------------
+    # Fetch network transaction intelligence
+    # --------------------------------------------------------
+
+    network_data: dict[str, Any] | None = None
+
+    try:
+        transactions = pd.read_parquet(
+            TRANSACTIONS_PATH
+        )
+
+        network_result = investigate_transaction(
+            transactions=transactions,
+            transaction_id=transaction_id,
+        )
+
+        network_data = network_result
+
+    except Exception:
+        network_data = None
+
+    # --------------------------------------------------------
+    # Fetch cluster intelligence
+    # --------------------------------------------------------
+
+    cluster_data: dict[str, Any] | None = None
+
+    has_temporal_burst = False
+
+    try:
+        if network_data is not None:
+            cluster = build_risk_cluster(
+                transactions,
+                account_id=str(
+                    network_data["account_id"]
+                ),
+                device_id=str(
+                    network_data["device_id"]
+                ),
+                merchant_id=str(
+                    network_data["merchant_id"]
+                ),
+                cluster_id=f"FR-{transaction_id}",
+            )
+
+            cluster_data = {
+                "cluster_id": cluster.cluster_id,
+                "cluster_type": cluster.cluster_type,
+                "risk_score": cluster.risk_score,
+                "accounts": cluster.accounts,
+                "devices": cluster.devices,
+                "merchants": cluster.merchants,
+                "transactions": cluster.transactions,
+                "signals": cluster.signals,
+                "evidence": cluster.evidence,
+                "timeline": cluster.timeline,
+            }
+
+            has_temporal_burst = any(
+                s.get("type") == "TEMPORAL_BURST"
+                for s in cluster.signals
+            )
+
+    except Exception:
+        cluster_data = None
+
+    # --------------------------------------------------------
+    # Network signals
+    # --------------------------------------------------------
+
+    network_signals: dict[str, Any] = {}
+    accounts_on_device: list[str] = []
+    accounts_at_merchant: list[str] = []
+
+    if network_data is not None:
+        network_signals = network_data.get(
+            "network_risk_signals", {}
+        )
+        accounts_on_device = network_data.get(
+            "accounts_seen_on_device", []
+        )
+        accounts_at_merchant = network_data.get(
+            "accounts_seen_at_merchant", []
+        )
+
+    # --------------------------------------------------------
+    # Audit history
+    # --------------------------------------------------------
+
+    audit_frame = store.audit(case_id)
+    has_audit_events = not audit_frame.empty
+
+    # --------------------------------------------------------
+    # Evidence synthesis
+    # --------------------------------------------------------
+
+    evidence_items = build_coordinated_evidence(
+        network_risk_signals=network_signals or None,
+        accounts_seen_on_device=accounts_on_device or None,
+        accounts_seen_at_merchant=accounts_at_merchant or None,
+        account_history_count=int(
+            network_data.get("account_history_count", 0)
+            if network_data else 0
+        ),
+        related_transaction_count=int(
+            network_data.get("related_transaction_count", 0)
+            if network_data else 0
+        ),
+        cluster_signals=(
+            [dict(s) for s in cluster_data["signals"]]
+            if cluster_data
+            else None
+        ),
+        cluster_evidence=(
+            cluster_data["evidence"]
+            if cluster_data
+            else None
+        ),
+        cluster_type=(
+            cluster_data["cluster_type"]
+            if cluster_data
+            else None
+        ),
+        cluster_risk_score=(
+            cluster_data["risk_score"]
+            if cluster_data
+            else None
+        ),
+        cluster_accounts=(
+            cluster_data["accounts"]
+            if cluster_data
+            else None
+        ),
+        cluster_devices=(
+            cluster_data["devices"]
+            if cluster_data
+            else None
+        ),
+        cluster_merchants=(
+            cluster_data["merchants"]
+            if cluster_data
+            else None
+        ),
+        cluster_transactions=(
+            cluster_data["transactions"]
+            if cluster_data
+            else None
+        ),
+        risk_score=float(case["risk_score"]),
+        model_probability=float(
+            case["model_probability"]
+        ),
+        network_score=float(case["network_score"]),
+    )
+
+    # --------------------------------------------------------
+    # Evidence prioritization
+    # --------------------------------------------------------
+
+    prioritized = prioritize_evidence(
+        evidence_items
+    )
+
+    grouped = group_by_tier(prioritized)
+
+    evidence_summary = {
+        "PRIMARY": len(grouped["PRIMARY"]),
+        "SUPPORTING": len(grouped["SUPPORTING"]),
+        "CONTEXTUAL": len(grouped["CONTEXTUAL"]),
+        "TOTAL": len(prioritized),
+    }
+
+    # --------------------------------------------------------
+    # Investigation path
+    # --------------------------------------------------------
+
+    steps = build_investigation_path(
+        status=str(case["status"]),
+        risk_score=float(case["risk_score"]),
+        decision=str(case["decision"]),
+        model_probability=float(
+            case["model_probability"]
+        ),
+        network_score=float(
+            case["network_score"]
+        ),
+        assigned_to=(
+            None
+            if case.get("assigned_to") is None
+            else str(case["assigned_to"])
+        ),
+        has_audit_events=has_audit_events,
+        device_shared=bool(
+            network_signals.get("device_shared", False)
+        ),
+        merchant_shared=bool(
+            network_signals.get("merchant_shared", False)
+        ),
+        new_device=bool(
+            network_signals.get(
+                "new_device_for_account", False
+            )
+        ),
+        accounts_on_device=len(accounts_on_device),
+        accounts_at_merchant=len(accounts_at_merchant),
+        cluster_type=(
+            cluster_data["cluster_type"]
+            if cluster_data
+            else None
+        ),
+        cluster_risk_score=(
+            cluster_data["risk_score"]
+            if cluster_data
+            else None
+        ),
+        cluster_accounts=(
+            cluster_data["accounts"]
+            if cluster_data
+            else None
+        ),
+        cluster_devices=(
+            cluster_data["devices"]
+            if cluster_data
+            else None
+        ),
+        cluster_transactions=(
+            cluster_data["transactions"]
+            if cluster_data
+            else None
+        ),
+        has_temporal_burst=has_temporal_burst,
+    )
+
+    # --------------------------------------------------------
+    # Response
+    # --------------------------------------------------------
+
+    return CaseIntelligenceResponse(
+        case_id=str(case["case_id"]),
+        transaction_id=transaction_id,
+        risk_score=float(case["risk_score"]),
+        risk_level=str(case["risk_level"]),
+        decision=str(case["decision"]),
+        primary_reason=str(
+            case["primary_reason"]
+        ),
+        evidence=[
+            PrioritizedEvidenceResponse(
+                **prioritized_to_dict(p)
+            )
+            for p in prioritized
+        ],
+        investigation_steps=[
+            InvestigationStepResponse(
+                **step_to_dict(s)
+            )
+            for s in steps
+        ],
+        evidence_summary=evidence_summary,
     )

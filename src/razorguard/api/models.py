@@ -229,3 +229,55 @@ class AnalyticsMetricResponse(BaseModel):
     status_distribution: list[AnalyticsDistributionItem]
 
     top_reasons: list[AnalyticsDistributionItem]
+
+
+# ============================================================
+# INVESTIGATION INTELLIGENCE
+# ============================================================
+
+
+class EvidenceItemResponse(BaseModel):
+    title: str
+    severity: str
+    category: str
+    explanation: str
+    investigative_relevance: str
+    supporting_entities: list[str]
+    supporting_transactions: list[str]
+    observed_value: str
+
+
+class PrioritizedEvidenceResponse(BaseModel):
+    title: str
+    severity: str
+    category: str
+    explanation: str
+    investigative_relevance: str
+    supporting_entities: list[str]
+    supporting_transactions: list[str]
+    observed_value: str
+    tier: str
+    priority_score: float
+    rank: int
+
+
+class InvestigationStepResponse(BaseModel):
+    priority: int
+    title: str
+    reason: str
+    supporting_evidence: list[str]
+    target_entity: str
+    navigation_target: str
+
+
+class CaseIntelligenceResponse(BaseModel):
+    case_id: str
+    transaction_id: str
+    risk_score: float
+    risk_level: str
+    decision: str
+    primary_reason: str
+
+    evidence: list[PrioritizedEvidenceResponse]
+    investigation_steps: list[InvestigationStepResponse]
+    evidence_summary: dict[str, int]
